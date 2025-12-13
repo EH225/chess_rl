@@ -16,6 +16,7 @@ import torch.nn as nn
 from utils.chess_env import ChessEnv
 from typing import Tuple, List, Callable, Optional
 
+
 #########################
 ### Naive Search Algo ###
 #########################
@@ -46,8 +47,8 @@ def naive_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, **
         return None, value, None
 
     # Else: Perform a search over possiable next actions in the env from the current starting state
-    action_values = [] # Record a value estimate for each possiable next action from the starting state
-    state_batches = [] # Record the FEN string encodings of possiable next states that we will feed through
+    action_values = []  # Record a value estimate for each possiable next action from the starting state
+    state_batches = []  # Record the FEN string encodings of possiable next states that we will feed through
     # the model in batches to get out value estimates for each
     state_batches_idx = []  # Record the indices of the actions each state in state_batches corresponds to,
     # we will only run states that are non-terminal through the model to minimize computations i.e. if the
@@ -60,16 +61,16 @@ def naive_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, **
             # this includes a truncated state from which we could continue to play additional moves
             # estimation thereafter using the value approximator (model)
             if len(state_batches) == 0 or len(state_batches[-1]) == batch_size:
-                state_batches.append([new_state, ]) # Start a new list for this next state obs
-            else: # Otherwise, append to the existing batch so that each is batch_size or less
+                state_batches.append([new_state, ])  # Start a new list for this next state obs
+            else:  # Otherwise, append to the existing batch so that each is batch_size or less
                 state_batches[-1].append(new_state)
             state_batches_idx.append(i)  # Make note of the index of action_values to add to later
-        env.rev_step() # Backtrack so that we can try a different move instead
+        env.rev_step()  # Backtrack so that we can try a different move instead
 
     # Compute the bootstrap value estimates in batches for the next possiable states after each action
     value_estimates = []
-    for state_batch in state_batches: # Compute the value estimates in batches to minimize runtime
-        with torch.no_grad(): # Disable grad-tracking, not needed since no gradient step being taken
+    for state_batch in state_batches:  # Compute the value estimates in batches to minimize runtime
+        with torch.no_grad():  # Disable grad-tracking, not needed since no gradient step being taken
             v_est = model(state_batch).cpu().tolist()  # Move the data from torch to a list on the CPU
         value_estimates.extend(v_est)  # Aggregate the state value estimates into 1 linear list
 
@@ -83,6 +84,7 @@ def naive_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, **
     action_values = np.array(action_values)
     best_action, state_value = action_values.argmax(), action_values.max()
     return best_action, state_value, action_values
+
 
 ######################################
 ### Minimax Alpha-Beta Search Algo ###
@@ -136,13 +138,13 @@ def _minimax_search(state: str, model, cache: dict, alpha: float = -float("inf")
     assert isinstance(max_depth, int) and max_depth >= 0, "max_depth must be >= 0 and an integer"
     env = ChessEnv(initial_state=state)  # Instantiate the current game state
 
-    if env.ep_ended: # Check if this is a terminal state, if checkmate then the current player lost
+    if env.ep_ended:  # Check if this is a terminal state, if checkmate then the current player lost
         return ((-1 if maximize else 1) if env.board.is_checkmate() else 0), 1
 
     elif depth == max_depth:  # If this node is at the maximal depth, then use the model to estimate the value
         state = " ".join(state.split()[:-1])  # Remove the full move counter from the state FEN string
         if state in cache:  # Check if this state has already been predicted using the model
-            val = cache[state] # If so, then use the pre-computed cached value to save compute
+            val = cache[state]  # If so, then use the pre-computed cached value to save compute
         else:  # Otherwise, if not yet computed, then compute and cache the output of the model
             val = model([state, ]).cpu().tolist()[0]
             cache[state] = val
@@ -158,7 +160,7 @@ def _minimax_search(state: str, model, cache: dict, alpha: float = -float("inf")
             next_state, reward, terminated, truncated = env.step(action)
             reward = reward * (1 if maximize else -1)  # Flip if needed for the perspective of the maximizer
 
-            if maximize is True: # A turn from the perspective of the original player who will want to
+            if maximize is True:  # A turn from the perspective of the original player who will want to
                 # maximize the overall value of the game
                 if not terminated:  # If the game continues further, recursively evaluate
                     val, n = _minimax_search(next_state, model, cache, v, beta, gamma, depth + 1,
@@ -199,7 +201,7 @@ def _minimax_search(state: str, model, cache: dict, alpha: float = -float("inf")
             nodes_evaluated += n  # Track how many total nodes were evaluated in the recursive call
             if depth == 0:  # Record the estimated value of each action that can be taken
                 action_vals.append(reward + gamma * val)
-            env.rev_step() # Back track in the env for the next action
+            env.rev_step()  # Back track in the env for the next action
         nodes_evaluated += 1  # Add 1 more now that we've finished evaluating this root node
 
         return (v, nodes_evaluated) if depth > 0 else (action_vals, nodes_evaluated)
@@ -232,7 +234,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
     if isinstance(action_vals, list):  # A list will be returned when state is non-terminal
         action_vals = np.array(action_vals)
         best_action, state_value = action_vals.argmax(), action_vals.max()
-    else: # Otherwise, if the input state was terminal, then only a single float value will be returned by
+    else:  # Otherwise, if the input state was terminal, then only a single float value will be returned by
         # the helper function denoting the state's reward for the player whose move it is next
         return None, action_vals, None
 
@@ -242,7 +244,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
 ### Create a little bit better of a board estimator, count the material differences
 def material_heuristic1(state_batch: List[str]) -> torch.Tensor:
     output = torch.zeros(len(state_batch))
-    val_dict = {"p":1, "n":3, "b":3, "r":5, "q": 10, "k":0}
+    val_dict = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 10, "k": 0}
     for i, s in enumerate(state_batch):
         board = chess.Board(s)
         net_material = 0
@@ -256,6 +258,7 @@ def material_heuristic1(state_batch: List[str]) -> torch.Tensor:
 
         output[i] = net_material
     return output
+
 
 ####################################
 ### Monte Carlo Tree Search Algo ###
@@ -282,9 +285,9 @@ def material_heuristic(state: str) -> float:
     net_material = 0
     for p in board.piece_map().values():
         piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece
-        if board.turn is True and p.symbol().islower(): # For white, lower-case pieces are foes
+        if board.turn is True and p.symbol().islower():  # For white, lower-case pieces are foes
             piece_val *= (-1)
-        elif board.turn is False and p.symbol().isupper(): # For black, upper-case pieces are foes
+        elif board.turn is False and p.symbol().isupper():  # For black, upper-case pieces are foes
             piece_val *= (-1)
         net_material += piece_val
 
@@ -296,6 +299,7 @@ class Node:
     """
     Class object used in Monte Carlo Tree Search (MCTS).
     """
+
     def __init__(self, state: str, parent: Optional[Node]):
         """
         Instantiates a MCTS tree node.
@@ -317,7 +321,7 @@ class Node:
 
         # Bool flag indicating whether this is a terminal game state node
         self.is_terminal = board.is_game_over()
-        if self.is_terminal: # If the game is over, record the terminal reward value from the view of p_turn
+        if self.is_terminal:  # If the game is over, record the terminal reward value from the view of p_turn
             # If the game ends in checkmate and p_turn is next to move, then p_turn lost
             self.terminal_reward = (-1 if board.turn is self.p_turn else 1) if board.is_checkmate() else 0
         else:
@@ -357,7 +361,7 @@ class Node:
             - P(child) = The prior value estimate for the child node, used to perform informed exploration
             - N(parent) = How many times the parent node has been visited in total
         """
-        if not self.children or self.unvisited_leaf_nodes == 0: # Return None if there are no child nodes
+        if not self.children or self.unvisited_leaf_nodes == 0:  # Return None if there are no child nodes
             return None  # yet unexplored down this route
 
         # Look for the max PUCT value among all child nodes with unvisited leaf nodes
@@ -389,11 +393,11 @@ class Node:
         """
         assert not self.is_expanded, "This node as already been expanded"
         unvisited_leaf_nodes_chg = 0  # Record how many new unexplored leaf nodes are created
-        if not self.is_terminal: # If not terminal, then there are additional child nodes we can add
+        if not self.is_terminal:  # If not terminal, then there are additional child nodes we can add
             board = chess.Board(self.state)  # Init a chess board object for internal operations
             uniform_prior = 1 / board.legal_moves.count()
             for move in board.legal_moves:  # Add a child node for each legal move starting here
-                board.push(move) # Make this move on the board to get the next resulting game state
+                board.push(move)  # Make this move on the board to get the next resulting game state
                 child = Node(state=board.fen(), parent=self)
                 if prior_heuristic is None:  # If no prior_heuristic provided, then set to the unif prior 1/n
                     child.prior = uniform_prior
@@ -402,7 +406,7 @@ class Node:
                     sign_flip = (1 if child.node_turn is child.p_turn else -1)
                     child.prior = prior_heuristic(child.state) * sign_flip
                 self.children.append(child)
-                board.pop() # Backtrack to visit the next legal move
+                board.pop()  # Backtrack to visit the next legal move
                 unvisited_leaf_nodes_chg += 1  # Record another unexplored child node added
 
             node = self  # Back propagate the update for unvisited_leaf_nodes to the root node
@@ -410,7 +414,7 @@ class Node:
                 node.unvisited_leaf_nodes += unvisited_leaf_nodes_chg
                 node = node.parent
 
-        self.is_expanded = True # Set this flag to true now that this node has been expanded with children
+        self.is_expanded = True  # Set this flag to true now that this node has been expanded with children
 
     def incriment_virtual_loss(self) -> None:
         """
@@ -447,8 +451,8 @@ class Node:
             node = node.parent  # Move up to the next node along the path to the root
 
 
-from collections import defaultdict
-
+## TODO: Review this one mroe time logically and with some examples to see if it makes sense, ask Grok to
+## review it as well and look for any mistakes there might be
 def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_size: int = 32,
                             n_iters: int = 200, **kwargs) -> Tuple[int, float, np.ndarray]:
     """
@@ -467,7 +471,7 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
         - state_value (float): The estimated value of the input starting state.
         - action_values (np.ndarray): The estimated value of each possiable next action.
     """
-    cache = {} # Cache the values output from the model, if we send it the same state 2x re-use prior values
+    cache = {}  # Cache the values output from the model, if we send it the same state 2x re-use prior values
     root = Node(state=state, parent=None)  # Create a search tree root node
     if root.is_terminal:  # If the input state is a terminal state, no searching required, board value known
         return None, root.terminal_reward, None
@@ -478,11 +482,11 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
         leaf_nodes = []  # Record leaf nodes to be passed to the model for batched evaluation
 
         # 1). Select leaf nodes for expansion in batches for batched evaluation through model(state_batch)
-        for k in range(batch_size): # Make batch_size leaf node selections
+        for k in range(batch_size):  # Make batch_size leaf node selections
             if root.unvisited_leaf_nodes == 0:  # If all nodes have been explored, stop iterating, there are
                 break  # no further unexplored leaf nodes left, all leaf nodes are terminal nodes
 
-            node = root # All paths in the tree begin at the root node
+            node = root  # All paths in the tree begin at the root node
 
             while node.is_expanded and not node.is_terminal:  # Traverse down the tree through the nodes that
                 # have already been visited before (expanded) and stop when we reach a node that is either
@@ -494,7 +498,7 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
             # Use virtual loss to discourage other iters from selecting a similar path and decriment the
             # unvisited_leaf_nodes counters along this path to prevent duplicate selections
             node.incriment_virtual_loss()
-            leaf_nodes.append(leaf_node) # Add this leaf node to our selection of leaf_nodes
+            leaf_nodes.append(leaf_node)  # Add this leaf node to our selection of leaf_nodes
 
         # 2). Collect the states from each leaf node and evaluate with 1 batch through the model
         state_batch, leaf_node_idx = [], []
@@ -503,7 +507,7 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
             if not leaf_node.is_terminal and leaf_node.state_ not in cache:
                 state_batch.append(leaf_node.state)
                 leaf_node_idx.append(i)
-                cache[leaf_node.state_] = None # Add a placeholder in the cache, this will prevent us from
+                cache[leaf_node.state_] = None  # Add a placeholder in the cache, this will prevent us from
                 # running duplicative states through the model for leaf nodes within the current leaf batch
 
         value_batch = model(state_batch).cpu().tolist()  # Feed all states in to utilize GPU parallelism
@@ -533,10 +537,11 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
 
 #### TODO: DEBUG TESTING ####
 if __name__ == "__main__":
-    # state = 'r1bqkb1r/pppp1ppp/5n2/4n3/P1B1P3/8/1PPP1PPP/RNB1K1NR b KQkq - 0 5'
-    state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/7q/5N1P/2PPPPP1/RNBQKB1R b KQkq - 2 5'
+    # state = 'r1bqkb1r/pppp1ppp/5n2/4n3/P1B1P3/8/1PPP1PPP/RNB1K1NR b KQkq - 0 5' # Regular board
+    state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/7q/5N1P/2PPPPP1/RNBQKB1R b KQkq - 2 5'  # 1 move away from checkmate
+    state = 'rnb1k1r1/pPppnppp/4p3/2b5/7q/5N1P/2PPPPP1/RNBQKB1R w KQq - 1 8'  # Pawn promotion
     board = chess.Board(state)
-    dummy_model = lambda x: torch.rand(len(x)) * 2 - 1 # TEMP sample model, fill in for a value approximator
+    dummy_model = lambda x: torch.rand(len(x)) * 2 - 1  # TEMP sample model, fill in for a value approximator
 
     ## Test the Naive Search algo
     # best_action, state_value, action_values = naive_search(state, dummy_model)
@@ -550,7 +555,6 @@ if __name__ == "__main__":
     # # returns results, the winning set of moves isn't that broad
     # print(action_values)
     # print(nodes_evaluated)
-
 
     # best_action, state_value, action_values  = minimax_search(state, dummy_model, gamma=1, horizon=3)
     # print("best_action", best_action)
@@ -571,14 +575,12 @@ if __name__ == "__main__":
 
 
     def max_depth(node, d=0):
-        if not node.children: # Recursion base-case
+        if not node.children:  # Recursion base-case
             return 1
         else:
             return max([max_depth(child) + 1 for child in node.children])
 
     # print("max_depth(root)", max_depth(root))
 
-
     ## TODO:
     ## Figure out what is wrong with the minimax search, why is it giving me so many 1s?
-

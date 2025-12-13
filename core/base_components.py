@@ -12,21 +12,22 @@ sys.path.insert(0, PARENT_DIR)
 
 import time, chess
 import numpy as np
+import pandas as pd
+from tqdm import tqdm
 from typing import Callable, List, Tuple, Union
 
 ## TODO: Clean these up at some point, delete out old stuff no longer in use
 import torch
 from torch.utils.tensorboard import SummaryWriter
 import gymnasium as gym
-import ale_py
 from collections import deque, defaultdict
 from utils.general import get_logger, Progbar
 from utils.replay_buffer import ReplayBuffer
 from utils.chess_env import ChessEnv
 from utils.general import read_yaml, pong_img_transform, save_eval_scores
+from utils.evaluate import evaluate_agent_game
 import core.search_algos as search_algos
 
-gym.register_envs(ale_py)
 
 
 #########################################
@@ -109,6 +110,10 @@ class LinearExploration(LinearSchedule):
             return self.env.action_space.sample()
         else:  # With probability (1 - epsilon), return the best_action
             return best_action
+
+### TODO: We should avoid running everything if we're going to select a random action, would make things faster
+
+
 
 
 #####################################
@@ -217,7 +222,6 @@ class DVN:
 
             self.v_network.apply(init_weights_randomly)
 
-
         # 3). Now that we have the model and weights initialized, move them to the appropriate device
         self.v_network = self.v_network.to(self.device)
 
@@ -269,6 +273,17 @@ class DVN:
         Returns a function that maps an input state (FEN game state) to the model's best action selection.
         """
         return lambda state: self.get_best_action(state)[0]
+
+    def agent_move_func(self, board: chess.Board) -> chess.Move:
+        """
+        Given an input chess.Board object, this method returns the model's recommended best action given the
+        current policy and greedy evaluation.
+
+        :param board: An input chess.Board object representing the current game state.
+        :return: A chess.Move that is the best action accroding to the learned RL model.
+        """
+        best_action, state_value, action_values = self.get_best_action(board.fen())
+        return list(board.legal_moves)[best_action]
 
     def save(self):
         """
@@ -347,11 +362,11 @@ class DVN:
 
         best_actions, state_values, action_values = [], [], []
 
-        ## TODO Will need to define _search_func and potentially try to make this parallel with dask
         batch_size = self.config["model"]["batch_size"]
         for state in state_batch:
-            ### TODO: need to update the calls of these functions with the relevant kwargs
-            ### TODO: Check that state will never be a terminal state, from which there is nothing to search
+            ### TODO: need to update the calls of these functions with the relevant kwargs, gotta figure out
+            ### What kwargs to use here or use a closuere to bind them in _search_func with kwargs from the
+            # config file, I think that probably makes the most sense
             best_action, state_value, action_vals = self._search_func(state=state, model=self.v_network,
                                                                       batch_size=batch_size)
             # Append the results from the search function evaluation of the state to the output lists
@@ -454,6 +469,57 @@ class DVN:
 
             episode_rewards.append(episode_reward)  # Record the total reward received during the last episode
 
+    def update_ep_record(ep_record: pd.Series, state: str, action: chess.Move, new_state: str) -> None:
+        """
+        Using the starting state (state), the action taken, and the new state that results, update the episode
+        record (a pd.Series) with key event information.
+
+        :param ep_record: A pd.Series tracking key information for this episode.
+        :param state: The FEN string of the starting game state.
+        :param action: The integer of the action from the starting game state's legal actions that was taken.
+        :param new_state: The FEN string of the next game state after 1 move.
+        :return: None, edits are made in-place to the existing ep_record series.
+        """
+        # Given the starting state and action, we don't strictly need new_state but we'll accept it anyways
+        s0, s1 = chess.Board(state), chess.Board(new_state)
+        move = list(s0.legal_moves)[action]
+        color = "white" if s0.turn is s0.WHITE else "black" # Color of the player who made the move
+
+        ep_record["total_moves"] += 1
+        outcome = s1.outcome()
+        if outcome: # If the game has ended
+            ep_record["outcome"] = outcome.termination.name
+            if outcome.winner is chess.WHITE:
+                ep_record["winner"] = "white"
+            elif outcome.winner is chess.BLACK:
+                ep_record["winner"] = "black"
+            else:
+                ep_record["winner"] = "none"
+            # If the game is over, then also record the net material difference from white's perspective
+            piece_values = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
+            net_material = 0
+            for p in s1.piece_map().values():
+                piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece
+                if s1.turn is True and p.symbol().islower(): # For white, lower-case pieces are foes
+                    piece_val *= (-1)
+                elif s1.turn is False and p.symbol().isupper(): # For black, upper-case pieces are foes
+                    piece_val *= (-1)
+                net_material += piece_val
+            ep_record["white_material_diff"] = net_material * (-1 if s1.turn is False else 1)
+
+        if s0.is_en_passant(move):  # Check if this move was an en passant move
+            ep_record[f"{color}_en_passant"] += 1
+        if s0.is_kingside_castling(move): # Check if this move was a king-side castle
+            ep_record[f"{color}_ks_castle"] += 1
+        if s0.is_queenside_castling(move): # Check if this move was a queen-side castle
+            ep_record[f"{color}_ks_castle"] += 1
+        if s0.gives_check(move): # Check if the move creates a check
+            ep_record[f"{color}_checks"] += 1
+        if move.promotion: # Check if this move was a pawn promotion
+            ep_record[f"{color}_promotions"] += 1
+
+        ep_record["state"] = new_state # Record the ending state FEN
+
     def train(self, exp_schedule: LinearExploration, lr_schedule: LinearSchedule,
               beta_schedule: LinearSchedule) -> None:
         """
@@ -490,7 +556,6 @@ class DVN:
         max_q_values = deque(maxlen=1000)  # Track the recent max_q_values we get from the v_network search
         q_values = deque(maxlen=1000)  # Track the recent q_values from the v_network across all actions
         self.init_averages()  # Used for tracking progress via Tensorboard
-        ### TODO - consider tracking the overall state estimates as well
 
         t, last_eval, last_record = 0, 0, 0  # These counter vars are used by triggers
         # t = tracks the global number of timesteps so far i.e. how many time we call self.env.step(action)
@@ -515,15 +580,29 @@ class DVN:
                 record_path = self.config["output"]["record_path"]
                 file_names = [x for x in os.listdir(record_path) if x.endswith('.mp4')]
                 if len(file_names) == 0:  # If there are no existing recordings, set the episode count to 0
-                    self.env.env.episode_id = 0
+                    self.env.episode_id = 0
                 else:  # Otherwise use the largest one we can find among them +1
-                    self.env.env.episode_id = max([int(x.replace("game-", "").replace(".mp4", ""))
-                                                   for x in file_names]) + 1
-
+                    self.env.episode_id = max([int(x.replace("game-", "").replace(".mp4", ""))
+                                               for x in file_names]) + 1
         else:  # If no eval_scores.csv cached on disk, then create a new list to store values
             eval_scores = []
         # Compile a list of evaluation scores, begin with an eval score run with the model's current weights
         eval_scores.append((t, self.evaluate()))  # List of scores computed for each evaluation run
+
+        # Look for an existing copy of an episode summary dataframe on disk if one exists
+        ep_df_cols = ["t", "episode_id", "outcome", "winner", "total_moves", "white_material_diff",
+                      "white_checks", "black_checks", "white_promotions", "black_promotions",
+                      "white_en_passant", "black_en_passant", "white_ks_castle", "black_ks_castle",
+                      "white_qs_castle", "black_qs_castle", "end_state"]
+        ep_df_file_path = os.path.join(self.config["output"]["plot_output"], "ep_history.csv")
+        if os.path.exists(ep_df_file_path):  # Check if an ep_history file has been cached
+            ep_df = pd.read_csv(ep_df_file_path)  # Read in the data from disk
+            if len(ep_df) > 0:
+                self.env.episode_id = ep_df["episode_id"].iloc[-1]
+            else:
+                raise ValueError("Episode DataFrame read from disk is empty")
+        else:
+            ep_df = pd.DataFrame(dtype=int, columns=ep_df_cols)
 
         # Record one episode at the beginning before training if set to True in the config
         if self.config["env"].get("record", None):  # Record must be specified and set to True
@@ -539,6 +618,9 @@ class DVN:
             episode_reward = 0  # Track the total reward from all actions during the episode
             state = self.env.reset()  # Reset the env to begin a new training episode
             replay_buffer.add_entry(state)  # Add the starting board to the replay buffer
+
+            ep_record = pd.Series(0, index=ep_df_cols, dtype=int)  # Entry for addition to the ep_df
+            ep_record["episode_id"] = self.env.episode_id
 
             while True:  # Run an episode of obs -> action -> obs -> action in the env until finished which
                 # happens when either 1). the episode has been terminated by the env 2). the episode has
@@ -573,6 +655,9 @@ class DVN:
                 # Track the total reward throughout the full episode
                 episode_reward += reward
 
+                # Update the episode record which tabulates key events using (s, a, s')
+                self.update_ep_record(ep_record, state, action, new_state)
+
                 # Perform a training step using the replay buffer to update the network parameters
                 loss_eval, grad_eval = self.train_step(t, replay_buffer, lr_schedule.param,
                                                        beta_schedule.param)
@@ -603,6 +688,9 @@ class DVN:
 
             # Perform updates at the end of each episode
             episode_rewards.append(episode_reward)  # Record the total reward received during the last episode
+            ep_record["t"] = t
+            ep_df.loc[len(ep_df), :] = ep_record  # Record as a new row in the episode record
+            ep_df.to_csv(ep_df_file_path)  # Write out a new copy of the ep_df for each new record added
 
             if (t - last_eval) >= self.config["model_training"]["eval_freq"]:
                 # If it has been more than eval_freq steps since the last time we ran an eval then run again
@@ -706,105 +794,52 @@ class DVN:
 
         return loss.item(), total_norm.item()  # Return the loss and the norm of the gradients
 
-
-
-    ##########################################################################################################
-    ### TODO: Everything below needs review and updating, everything above is in pretty good shape overall
-    ## TODO: need to figure out where and when the values required on the GPU are transfered over there
-
-
-    ## TODO: Export this to some helper functions somewhere else perhaps so that things don't get too long
-    ## here, but essentially to save on compute, we want to pass batches of images into the network to process
-    ## all at once in parallel. So we should play all 50 games simultaneously if possible.
-
-
-    ## TODO: It would be a lot faster to run batches of games if possiable rather than having them all run
-    ## one at a time, would be faster to pass in all the gameboard inputs at once for processing
-    def evaluate(self, num_episodes: int = None, verbose: bool = True) -> float:
+    def evaluate(self, num_episodes: int = None, record_last: bool = True, verbose: bool = True) -> float:
         """
-        Runs a series of N (num_episodes) episodes using the current model parameters to evaluate the current
-        parameter set. Returns the average return per episode.
+        Runs a series of self-pay games (num_episodes) using the current model parameters with greedy action
+        selection to evaluate the current parameter set and returns and average per episode score.
 
-        :param num_episodes: The number of episodes to run to compute an average per episode return.
+        Score here is defined using ACPL = Average Centipawn Loss which uses stockfish to evaluate the board
+        before and after a move is make and computes the difference to create a quality loss metric. The lower
+        the quality loss, the better. This metric allows us to evaluate sel-play matches, is highly correlated
+        to  Elo score and is much lower variance which means fewer games are needed to establish a score.
+
+        :param num_episodes: The number of episodes to run to compute an average per episode score.
+        :param record_last: If set to True, then the last game will be recorded as a video save saved to disk.
         :param verbose: Indicates whether the results of the evaluation run should be reported via logging.
-        :return: The average per episode return over num_episodes.
+        :return: The average per episode socre over num_episodes.
         """
-        # Run num_episodes // 2 as white and num_episodes // 2 as black to test it
+        all_losses = []
 
-        if num_episodes is None:  # Override with the default from the config if not specified
-            num_episodes = self.config["model_training"]["num_episodes_test"]
+        for g in tqdm(range(num_episodes), ncols=75):
+            ep_losses = evaluate_agent_game(self.agent_move_func) # The losses for each move for 1 game
+            all_losses.extend(ep_losses) # Aggregate the losses over all moves and all games
+            self.logger.info(f"Game {g + 1}: ACPL = {sum(ep_losses) / len(ep_losses):.1f}")
 
-        if verbose:
-            self.logger.info(f"\nEvaluating N={num_episodes} episodes...")
+        overall_acpl = sum(all_losses) / len(all_losses)
+        self.logger.info(f"\nOverall ACPL: {overall_acpl:.1f}")
+        return overall_acpl
 
-        # Use a replay buffer as a deque to track the last K frames, no sampling done here, keep the size of
-        # the buffer limited to state_history so that we can save space, no need to dim large tensors
-        replay_buffer = ReplayBuffer(self.config["hyper_params"]["state_history"],
-                                     self.config["hyper_params"]["state_history"],
-                                     device=self.device, max_val=self.config["env"]["max_val"],
-                                     eps=self.config["hyper_params"]["eps"],
-                                     alpha=self.config["hyper_params"]["alpha"],
-                                     seed=self.config["env"].get("seed"))
-        episode_rewards = []  # Keep track of the rewards for each eval episode run
-
-        for i in range(num_episodes):  # Run N episodes to perform an evaluation call
-            episode_reward = 0  # Track the total reward from all actions during the episode
-            state = self.env.reset()  # Reset the env to begin a new training episode
-            # replay_buffer.add_entry(state, 0, 0, 0, 0)  # Add a new entry to the replay buffer using the
-            # initial frame from the env, we record (s', a, r, terminated, truncated) tuples
-
-            while True:  # Iterate until we reach the end of the episode (terminated or truncated)
-                q_network_input = replay_buffer.get_stacked_obs()  # Get the most recent state obs that is
-                # frame stacked if there is one to grab from the replay buffer, q_network_input=None
-                # (batch_size=1, frame_stack, img_h, img_w, img_c) e.g. [1, 4, 80, 80, 1])
-
-                # No gradient updates made during the eval episodes, handled internally within get_best_action
-                action = self.get_best_action(q_network_input)[0]  # Get best action recommended by the model
-
-                # Perform the selected action in the env, get the new state and reward
-                new_state, reward, terminated, truncated, info = self.env.step(action)
-                reward = np.clip(reward, -1, 1)  # We expect +/-1, but add reward clipping for stability
-
-                # Record the (s', a, r, terminated, truncated, t) transition in the replay buffer
-                replay_buffer.add_entry(new_state, action, reward, terminated, truncated)
-
-                # Track the total reward throughout the full episode
-                episode_reward += reward
-
-                if terminated or truncated:  # Check for episode stopping conditions
-                    break
-
-            # Perform updates at the end of each episode
-            episode_rewards.append(episode_reward)
-
-        # Compute summary statistics on the evaluation episodes computed
-        avg_reward = np.mean(episode_rewards)
-        sigma_reward = np.std(episode_rewards)
-
-        if num_episodes > 1 and verbose:  # So long as the num of episodes was > 1 we will have data to report
-            self.logger.info(f"Average reward: {avg_reward:04.2f} +/- {sigma_reward:04.2f}")
-
-        return avg_reward
-
-
-
-
-    ## TODO: This needs updating
-    def record(self, timestamp: str) -> None:
+    def record(self, max_moves: int = 300) -> None:
         """
         This method records a video for 1 episode using the model's current weights and saves it to disk.
-        Videos are saved to self.config["output"]["record_path"] and are named: rl-video-episode-{ep} where
-        ep is the episode counter from the environment which will monotonically increase during training.
+        Videos are saved to self.config["output"]["record_path"] and are named: game-{ep} where ep is the
+        episode counter from the environment which will monotonically increase during training.
+
+        :param max_moves: An integer denoting the max number of moves allowed per game.
+        :return: None. Records a video of a self-play game and saves it to disk.
         """
-        ## TODO: Run some kind of eval again a standard computer benchmark and record the game vs stockfish
-        # or some other eval benchmark engine that we are competing against
-        ### Toggle the setting for record to True and run an eval episode
+        state = self.env.reset() # Clear out any existing game state and begin fresh
+        self.env.record = True # Toggle on the recording setting within the ChessEnv
+        # Create a policy function that return the best move index according to the model
+        policy = self.policy()
 
+        move_counter = 0
+        terminated, truncated = False, False
+        while move_counter < max_moves and not (terminated or truncated):
+            new_state, reward, terminated, truncated = self.env.step(policy(state))
+            state = new_state # Update for next iteration
+            move_counter += 1
 
-        self.logger.info(f"Recording episode at training timestep: {timestamp}")
-        record_path = self.config["output"]["record_path"]
-        os.makedirs(record_path, exist_ok=True)  # Make the save directory if not already there
-        self.config["record_toggle"][0] = True  # Toggle recordings on
-        self.evaluate(1, False)  # Run 1 episode through the eval method to generate a recording
-        self.config["record_toggle"][0] = False  # Switch recordings off again when finished
-        self.env.reset()  # Reset the env to end the episode and finish the recording
+        state = self.env.reset() # The env reset triggers the steps in the move_stack to be recorded
+        self.env.record = False # Turn off recordings for future env steps
