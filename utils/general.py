@@ -2,10 +2,9 @@
 This module contains general utility functions that are used throughout the training, evaluation, and
 post-processing pipeline.
 """
-import time, sys, logging, yaml, os, cv2
+import time, sys, logging, yaml, os
 import numpy as np
 from typing import Tuple, List
-from collections import defaultdict
 
 import matplotlib
 
@@ -73,85 +72,6 @@ def save_eval_scores(eval_scores: List[Tuple[float]], save_dir: str) -> None:
     np.savetxt(os.path.join(save_dir, "eval_scores.csv"), eval_scores, delimiter=", ", fmt="% s")
 
 
-def process_recording(input_path: str, output_path: str, time_ds: int = 4, size_ds: int = 1,
-                      max_len: int = 120, codec: str = 'mp4v') -> None:
-    """
-    Performs post-processing on a recording from the env. This function is able to down-sample temporally
-    by retaining every Nth frame (controlled by time_ds), down-sample the size of the video frames by a
-    factor of N (controlled by size_ds) and also cap the video length to a specified max_len in seconds.
-
-    :param input_path: A file path to the original input video to be processed.
-    :param output_path: A file paths for where the processed video should be written to.
-    :param time_ds: A temporal down-sampling factor i.e. every Nth frame will be retained. If set to 1 then
-        no temporal down-sampling is performed and the video recording remains that the original speed.
-    :param size_ds: A frame size down-sampling factor i.e. if size_ds = 2 then the frame dimensions, height
-        and width, will be reduced by a multiple of 2.
-    :param max_len: A time limit it seconds for the output video, the default is 120 seconds = 2 minutes.
-    :param codec: FourCC codec, default 'mp4v' which is usually best for handling mp4 files.
-    :return: None, the output video is written to disk to output_path.
-    """
-    input_video = cv2.VideoCapture(input_path)  # Read in the input video from disk
-    if not input_video.isOpened():
-        raise RuntimeError(f"Cannot open video {input_path}")
-
-    # Record the original video properties
-    fps = input_video.get(cv2.CAP_PROP_FPS)  # Frames per second
-    width = int(input_video.get(cv2.CAP_PROP_FRAME_WIDTH))  # Frame width
-    height = int(input_video.get(cv2.CAP_PROP_FRAME_HEIGHT))  # Frame height
-    # 4-byte code used to specify the video codec or compression format
-    # fourcc = cv2.VideoWriter_fourcc(*codec)
-    fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Best option for HTML display compatibility
-
-    # Perform frame dimension down-sampling if specified by size_ds
-    new_width, new_height = width // size_ds, height // size_ds
-    output_video = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
-
-    frame_idx, frames_written = 0, 0
-    total_frame_limit = max_len * fps  # The upper bound on how many frames to record
-
-    while True:  # Write frames from the input video to the output video after processing them
-        return_flag, frame = input_video.read()  # Read in the next frame from the input video
-        if not return_flag or frames_written > total_frame_limit:
-            break
-        if frame_idx % time_ds == 0:  # Down-sample to every nth frame and re-size
-            output_video.write(cv2.resize(frame, (new_width, new_height)))
-            frames_written += 1
-        frame_idx += 1
-
-    input_video.release()
-    output_video.release()
-
-
-def video_post_processing(config: dict, time_ds: int = 4, size_ds: int = 1, max_len: int = 120) -> None:
-    """
-    Runs video post-processing on all .mp4 video files located in the record_path (if available) specified by
-    the input config dictionary. This function performs post-processing recordings from the env created during
-    training. This function is able to down-sample temporally by retaining every Nth frame (controlled by
-    time_ds), down-sample the size of the video frames by a factor of N (controlled by size_ds) and also cap
-    the video length to a specified max_len in seconds.
-
-    :param config: An input config file specifying a config.output.record_path directory of .mp4 videos.
-    :param time_ds: A temporal down-sampling factor i.e. every Nth frame will be retained. If set to 1 then
-        no temporal down-sampling is performed and the video recording remains that the original speed.
-    :param size_ds: A frame size down-sampling factor i.e. if size_ds = 2 then the frame dimensions, height
-        and width, will be reduced by a multiple of 2.
-    :param max_len: A time limit it seconds for the output video, the default is 120 seconds = 2 minutes.
-    :return: None, the output videos are written to disk to to the record_path/postprocessed location.
-    """
-    if config["output"].get("record_path", None):  # If there is a record_path listed in the config
-        output_path = os.path.join(config["output"]["record_path"], "postprocessed")
-        os.makedirs(output_path, exist_ok=True)  # Make the save directory if not already there
-        start_time = time.perf_counter()  # Report how long it takes to process the video recordings
-
-        for filename in os.listdir(config["output"]["record_path"]):
-            if filename.endswith(".mp4"):  # Operate only on the .mp4 files
-                process_recording(input_path=os.path.join(config["output"]["record_path"], filename),
-                                  output_path=os.path.join(output_path, filename),
-                                  time_ds=time_ds, size_ds=size_ds, max_len=max_len)
-
-        print(f"Video recording post processing complete! ({time.perf_counter() - start_time:.1f}s)")
-
-
 def get_logger(log_filename: str) -> logging.Logger:
     """
     Returns a logging.Logger instance that will write log outputs to a filepath specified.
@@ -163,65 +83,8 @@ def get_logger(log_filename: str) -> logging.Logger:
     handler.setLevel(logging.DEBUG)
     handler.setFormatter(logging.Formatter("%(asctime)s:%(levelname)s: %(message)s"))
     logging.getLogger().addHandler(handler)
+    logging.getLogger("chess.engine").setLevel(logging.INFO)  # Supress printouts from the chess env
     return logger
-
-
-##############################
-### Timer Class Definition ###
-##############################
-# TODO: Section marker
-
-class Timer:
-    """
-    Timer object used to track the runtime for various operations segmented into various categories.
-    """
-
-    def __init__(self, enabled: bool = False) -> None:
-        super().__init__()
-        self.enabled = enabled
-        # A bucket of [total_secs, latest_start, num_calls]
-        self.category_sec_avg = defaultdict(lambda: [0.0, 0.0, 0])
-
-    def start(self, category: str) -> None:
-        """
-        Method for recording the start of a given action instance from a specified category.
-        """
-        if self.enabled:  # Begin counting how long this action of type category takes
-            stat = self.category_sec_avg[category]  # [total_secs, latest_start, num_calls]
-            stat[1] = time.perf_counter()  # Record the latest_start time
-            stat[2] += 1  # Incriment the number of times this operation has been called
-
-    def end(self, category: str) -> None:
-        """
-        Method for recording the end of a given action instance from a specified category.
-        """
-        if self.enabled:  # End counting how long this action of type category takes
-            stat = self.category_sec_avg[category]  # [total_secs, latest_start, num_calls]
-            # Add how long the most recent execution took of an action of this type to the total_secs spend
-            # on all actions of this type
-            stat[0] += time.perf_counter() - stat[1]  # Now - start seconds = runtime duration
-
-    def print_stat(self) -> None:
-        """
-        Prints a summary of runtimes for each action category tracked internally by this Timer object.
-        """
-        if self.enabled:  # Report the runtime stats for each type of operation if enabled
-            print("Printing timer stats:")
-            for key, val in self.category_sec_avg.items():  # Iter over all types of operations
-                # val = [total_secs, latest_start, num_calls]
-                if val[2] > 0:  # If we have called this operation at least 1x, then report it's avg runtime
-                    print(f":> category {key}, total {val[0]}, calls {val[2]}, avg {val[0] / val[2]} s/call")
-
-    def reset_stat(self) -> None:
-        """
-        Resets the internal state of the Timer object for all categories of actions i.e. clears all existing
-        data on runtimes.
-        """
-        if self.enabled:
-            print("Reseting all timer stats")
-            for val in self.category_sec_avg.values():  # val = [total_secs, latest_start, num_calls]
-                val[0], val[1], val[2] = 0.0, 0.0, 0
-
 
 ################################
 ### Progbar Class Definition ###

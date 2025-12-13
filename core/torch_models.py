@@ -72,6 +72,7 @@ class MLP(nn.Module):
             nn.Linear(128, 1),
             nn.Tanh()
         )  # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
+        self.device = next(self.model.parameters()).device
 
     def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -133,7 +134,7 @@ class MLP(nn.Module):
         # Add info about castling rights and how close are to a draw based on the 50-move rule
         output = torch.concatenate([output, extra_info], dim=1)  # (B, 384) +  (B, 5) =  (B, 389)
         # Move the model_input to the required device so it can be run through the network before returning
-        return output.to(self.model.device)
+        return output.to(self.device)
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -205,6 +206,7 @@ class CNN(nn.Module):
             nn.Linear(128, 1),  # (batch_size, 128) -> (batch_size, 1)
             nn.Tanh()
         )  # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
+        self.device = next(self.model.parameters()).device
 
     def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -273,7 +275,7 @@ class CNN(nn.Module):
             output[i, 16, :, :] = min(board.halfmove_clock, 100) / 100.0  # Scale to be [0, 1]
 
         # Move the model_input to the required device so it can be run through the network before returning
-        return output.to(self.model.device)
+        return output.to(self.device)
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -330,6 +332,7 @@ class Transformer(nn.Module):
         self.encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=self.num_layers,
                                              norm=nn.LayerNorm(self.hidden_size))
         self.proj = nn.Linear(self.embed_size, 1)  # Final linear projection after pooling to 1 output value
+        self.device = next(self.encoder.parameters()).device
 
     def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -395,7 +398,7 @@ class Transformer(nn.Module):
         output = output.reshape(len(state_batch), -1)  # Reshape to (batch_size, 64) to flatten
 
         # Add the additional 4 tokens for castling rights and move to the required device
-        output = torch.concat([output, castling], dim=1).to(self.model.device)  # (batch_size, 68) ints
+        output = torch.concat([output, castling], dim=1).to(self.device)  # (batch_size, 68) ints
 
         # Pass these token integers through the embedding layer to convert them into embedding vectors
         output = self.token_embeddings(output)  # (batch_size, 68, embed_size)
@@ -441,11 +444,11 @@ class ChessAgent(DVN):
         state. self.v_network will be the learned value-function approximator. This method also instantiates
         an optimizer for training.
         """
-        if self.config["model"]["type"] == "MLP":
+        if self.config["model_class"] == "MLP":
             model_class = MLP
-        elif self.config["model"]["type"] == "CNN":
+        elif self.config["model_class"] == "CNN":
             model_class = CNN
-        elif self.config["model"]["type"] == "Transformer":
+        elif self.config["model_class"] == "Transformer":
             model_class = Transformer
         else:
             raise ValueError(f"Model type from config not recognized: {self.config['model']['type']}")
@@ -454,7 +457,7 @@ class ChessAgent(DVN):
 
         # Init the optimizer for training, add L2 regularization through the weight_decay parameter
         self.optimizer = torch.optim.Adam(self.v_network.parameters(),
-                                          weight_decay=self.config["model"]["wt_decay"])
+                                          weight_decay=self.config["hyper_params"]["wt_decay"])
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """

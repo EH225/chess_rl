@@ -5,7 +5,7 @@ the environment and allows for a sampling of past experiences for training steps
 
 import numpy as np
 import torch
-from typing import Tuple, Optional, List
+from typing import Optional, List
 
 
 class ReplayBuffer:

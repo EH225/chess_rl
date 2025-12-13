@@ -14,17 +14,17 @@ import time, chess
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 from typing import Callable, List, Tuple, Union
 
 ## TODO: Clean these up at some point, delete out old stuff no longer in use
 import torch
 from torch.utils.tensorboard import SummaryWriter
-import gymnasium as gym
-from collections import deque, defaultdict
+from collections import deque
 from utils.general import get_logger, Progbar
 from utils.replay_buffer import ReplayBuffer
-from utils.chess_env import ChessEnv
-from utils.general import read_yaml, pong_img_transform, save_eval_scores
+from utils.chess_env import ChessEnv, save_recording
+from utils.general import save_eval_scores
 from utils.evaluate import evaluate_agent_game
 import core.search_algos as search_algos
 
@@ -164,7 +164,7 @@ class DVN:
         self.summary_writer = SummaryWriter(self.config["output"]["tensorboard"], max_queue=int(1e5))
 
         # Configure the search function to be used for this model
-        self._search_func = getattr(search_algos, config["model"]["search_algo"])
+        self._search_func = getattr(search_algos, config["search_func"]["name"])
 
     def initialize_model(self) -> None:
         """
@@ -362,13 +362,9 @@ class DVN:
 
         best_actions, state_values, action_values = [], [], []
 
-        batch_size = self.config["model"]["batch_size"]
         for state in state_batch:
-            ### TODO: need to update the calls of these functions with the relevant kwargs, gotta figure out
-            ### What kwargs to use here or use a closuere to bind them in _search_func with kwargs from the
-            # config file, I think that probably makes the most sense
             best_action, state_value, action_vals = self._search_func(state=state, model=self.v_network,
-                                                                      batch_size=batch_size)
+                                                                      **self.config["search_func"])
             # Append the results from the search function evaluation of the state to the output lists
             best_actions.append(best_action)
             state_values.append(state_value)
@@ -469,7 +465,7 @@ class DVN:
 
             episode_rewards.append(episode_reward)  # Record the total reward received during the last episode
 
-    def update_ep_record(ep_record: pd.Series, state: str, action: chess.Move, new_state: str) -> None:
+    def update_ep_record(self, ep_record: pd.Series, state: str, action: chess.Move, new_state: str) -> None:
         """
         Using the starting state (state), the action taken, and the new state that results, update the episode
         record (a pd.Series) with key event information.
@@ -483,7 +479,7 @@ class DVN:
         # Given the starting state and action, we don't strictly need new_state but we'll accept it anyways
         s0, s1 = chess.Board(state), chess.Board(new_state)
         move = list(s0.legal_moves)[action]
-        color = "white" if s0.turn is s0.WHITE else "black" # Color of the player who made the move
+        color = "white" if s0.turn is chess.WHITE else "black" # Color of the player who made the move
 
         ep_record["total_moves"] += 1
         outcome = s1.outcome()
@@ -536,6 +532,7 @@ class DVN:
         :param beta_schedule: A schedule for the beta used in replay buffer weighted sampling.
         :return: None. Model weights and outputs are saved to disk periodically and also at the end.
         """
+        start_time = time.time()
         self.logger.info(f"Training model: {self.config['model']}")
         self.logger.info(f"Running model training on device: {self.device}")
 
@@ -548,7 +545,7 @@ class DVN:
         replay_buffer = ReplayBuffer(size=self.config["hyper_params"]["buffer_size"],
                                      eps=self.config["hyper_params"]["eps"],
                                      alpha=self.config["hyper_params"]["alpha"],
-                                     seed=self.config["env"].get("seed"))
+                                     seed=self.config["model_training"].get("seed"))
 
         # 2). Collect recent rewards and q-values in deque data structures and init other tracking vars
         # Track the rewards after running each episode to completion or truncation / termination
@@ -557,10 +554,9 @@ class DVN:
         q_values = deque(maxlen=1000)  # Track the recent q_values from the v_network across all actions
         self.init_averages()  # Used for tracking progress via Tensorboard
 
-        t, last_eval, last_record = 0, 0, 0  # These counter vars are used by triggers
+        t, last_eval = 0, 0  # These counter vars are used by triggers
         # t = tracks the global number of timesteps so far i.e. how many time we call self.env.step(action)
         # last_eval = records the value of t at which we last ran an self.evaluation()
-        # last_record = records the value of t at which we ran self.record()
 
         # First look if there is an eval_score.csv file already on disk, if so, read it in and continue adding
         # to it from there, use it to infer the t that we will continue training at
@@ -574,7 +570,7 @@ class DVN:
             self._populate_buffer(replay_buffer, exp_schedule, episode_rewards, max_q_values, q_values,
                                   self.config["hyper_params"]["learning_start"])
 
-            if self.config["env"]["record"]:  # If we are recording episodes, adjust the episode counter
+            if self.config["model_training"].get("record"):  # If recording episodes, adjust episode counter
                 # based on the largest cached value in the recordings directory so that any future recordings
                 # continue to be numbered higher than the existing recording numbers
                 record_path = self.config["output"]["record_path"]
@@ -587,7 +583,8 @@ class DVN:
         else:  # If no eval_scores.csv cached on disk, then create a new list to store values
             eval_scores = []
         # Compile a list of evaluation scores, begin with an eval score run with the model's current weights
-        eval_scores.append((t, self.evaluate()))  # List of scores computed for each evaluation run
+        eval_scores.append((t, self.evaluate(num_episodes=self.config["model_training"]["num_episodes_test"],
+                                             record_last=self.config["model_training"]["record"])))
 
         # Look for an existing copy of an episode summary dataframe on disk if one exists
         ep_df_cols = ["t", "episode_id", "outcome", "winner", "total_moves", "white_material_diff",
@@ -603,11 +600,6 @@ class DVN:
                 raise ValueError("Episode DataFrame read from disk is empty")
         else:
             ep_df = pd.DataFrame(dtype=int, columns=ep_df_cols)
-
-        # Record one episode at the beginning before training if set to True in the config
-        if self.config["env"].get("record", None):  # Record must be specified and set to True
-            last_record = t  # Update the timestamp of when we last recorded an episode
-            self.record(t)
 
         prog = Progbar(target=self.config["hyper_params"]["nsteps_train"])  # Training progress bar
 
@@ -696,24 +688,21 @@ class DVN:
                 # If it has been more than eval_freq steps since the last time we ran an eval then run again
                 if t >= self.config["hyper_params"]["learning_start"]:
                     last_eval = t  # Record the training timestep of the last eval (now)
-                    eval_scores.append((t, self.evaluate()))  # Compute a new eval score value for the model
+                    eval_scores.append(
+                        (t, self.evaluate(num_episodes=self.config["model_training"]["num_episodes_test"],
+                                          record_last=self.config["model_training"]["record"]))
+                        )  # Compute a new eval score value for the model
                     save_eval_scores(eval_scores, self.config["output"]["plot_output"])  # Save results
-
-            if self.config["env"].get("record", None):  # If the config says to periodically record
-                if (t - last_record) >= self.config["model_training"]["record_freq"]:  # Hit record freq
-                    if t >= self.config["hyper_params"]["learning_start"]:  # Past warm-up period
-                        last_record = t  # Record the training timestep of the last record (now)
-                        self.record(t)
 
         # Final screen updates
         self.logger.info("Training done.")
         self.save()  # Save the final model weights after training has finished
-        eval_scores.append((t, self.evaluate()))  # Evaluate 1 more time at the end with the final weights
+        eval_scores.append((t, self.evaluate(num_episodes=self.config["model_training"]["num_episodes_test"],
+                                             record_last=self.config["model_training"]["record"])))
         save_eval_scores(eval_scores, self.config["output"]["plot_output"])
 
-        # Record one episode at the end of training if set to True in the config
-        if self.config["env"].get("record", None):
-            self.record(t)
+        duration = time.time() - start_time
+        self.logger.info(f"Training finished in {duration/60:.1f} minutes")
 
     def train_step(self, t: int, replay_buffer: ReplayBuffer, lr: float, beta: float) -> None:
         """
@@ -734,10 +723,6 @@ class DVN:
         if t >= learning_start and t % learning_freq == 0:  # Update the q_network parameters with samples
             # from the reply buffer, which we only do every so often during game play
             loss_eval, grad_eval = self.update_step(replay_buffer, lr, beta)
-
-        # Occasionally update the target network with the Q network parameters
-        if t % self.config["hyper_params"]["target_update_freq"] == 0:
-            self.update_target_network()
 
         # Occasionally save the model weights during training
         if t % self.config["model_training"]["saving_freq"] == 0:
@@ -809,15 +794,22 @@ class DVN:
         :param verbose: Indicates whether the results of the evaluation run should be reported via logging.
         :return: The average per episode socre over num_episodes.
         """
+        self.logger.info(f"\nRunning Evaluation for {num_episodes} episodes")
         all_losses = []
 
-        for g in tqdm(range(num_episodes), ncols=75):
-            ep_losses = evaluate_agent_game(self.agent_move_func) # The losses for each move for 1 game
-            all_losses.extend(ep_losses) # Aggregate the losses over all moves and all games
-            self.logger.info(f"Game {g + 1}: ACPL = {sum(ep_losses) / len(ep_losses):.1f}")
+        with logging_redirect_tqdm():
+            for g in tqdm(range(num_episodes), ncols=75):
+                # Compute the losses for each move for 1 self-play game
+                ep_losses, move_stack = evaluate_agent_game(self.agent_move_func, return_move_stack=True)
+                all_losses.extend(ep_losses) # Aggregate the losses over all moves and all games
+                self.logger.info(f"Game {g + 1}: ACPL = {sum(ep_losses) / len(ep_losses):.1f}")
 
         overall_acpl = sum(all_losses) / len(all_losses)
         self.logger.info(f"\nOverall ACPL: {overall_acpl:.1f}")
+
+        if record_last is True:  # Save the last evaluation episode as a recording
+            save_recording(move_stack, self.config["output"]["record_path"])
+
         return overall_acpl
 
     def record(self, max_moves: int = 300) -> None:

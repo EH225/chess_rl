@@ -12,7 +12,6 @@ sys.path.insert(0, PARENT_DIR)
 
 import numpy as np
 import torch, chess
-import torch.nn as nn
 from utils.chess_env import ChessEnv
 from typing import Tuple, List, Callable, Optional
 
@@ -71,7 +70,7 @@ def naive_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, **
     value_estimates = []
     for state_batch in state_batches:  # Compute the value estimates in batches to minimize runtime
         with torch.no_grad():  # Disable grad-tracking, not needed since no gradient step being taken
-            v_est = model(state_batch).cpu().tolist()  # Move the data from torch to a list on the CPU
+            v_est = model(state_batch).cpu().reshape(-1).tolist()
         value_estimates.extend(v_est)  # Aggregate the state value estimates into 1 linear list
 
     for idx, val in zip(state_batches_idx, value_estimates):  # Add the bootstrapped value estimates for s'
@@ -146,7 +145,8 @@ def _minimax_search(state: str, model, cache: dict, alpha: float = -float("inf")
         if state in cache:  # Check if this state has already been predicted using the model
             val = cache[state]  # If so, then use the pre-computed cached value to save compute
         else:  # Otherwise, if not yet computed, then compute and cache the output of the model
-            val = model([state, ]).cpu().tolist()[0]
+            with torch.no_grad():  # Disable grad-tracking, not needed since no gradient step being taken
+                val = model([state, ]).cpu().reshape(-1).tolist()[0]
             cache[state] = val
         return (val * (1 if maximize else -1)), 1
 
@@ -510,7 +510,9 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
                 cache[leaf_node.state_] = None  # Add a placeholder in the cache, this will prevent us from
                 # running duplicative states through the model for leaf nodes within the current leaf batch
 
-        value_batch = model(state_batch).cpu().tolist()  # Feed all states in to utilize GPU parallelism
+        with torch.no_grad():
+            value_batch = model(state_batch).cpu().reshape(-1).tolist()  # Run in parallel on the GPU
+            value_batch = value_batch.cpu().tolist()  # Move the data from torch to a list on the CPU
         for idx, val_est in zip(leaf_node_idx, value_batch):  # Update the cache with the new model outputs
             cache[leaf_nodes[idx].state_] = val_est
 
