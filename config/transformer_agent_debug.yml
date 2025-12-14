@@ -30,7 +30,7 @@ model_training:
     load_dir: !join_path [*output_path, "saved_weights/"] # Location to look for pre-trained saved weights
     num_episodes_test: 1 # The number of episodes to run for each periodic evaluation step
     clip_val: 1.0 # The norm of the gradient vector used in grad clipping
-    saving_freq: 100 # The frequency of saving model weights measured in training timesteps
+    saving_freq: 10 # The frequency of saving model weights measured in training timesteps
     log_freq: 5 # The frequency of log updates during training measured in training timesteps
     eval_freq: 100 # The frequency of evaluation runs measured in training timesteps
     max_eval_moves: 10 # Set the max number of moves per eval self-play game

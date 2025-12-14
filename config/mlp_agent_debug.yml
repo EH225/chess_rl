@@ -43,7 +43,7 @@ hyper_params:
     lr_end: 0.000025 # The final value of the learning rate
     lr_nsteps: 1500000 # The number of steps over which the learning rate is decayed
     
-    eps_begin: 1.0 # The first value of the epsilon exploration probability
+    eps_begin: 0.5 # The first value of the epsilon exploration probability
     eps_end: 0.01 # The final value of the epsilon exploration probability
     eps_nsteps: 2000000 # The number of steps over which the epsilon exploration probability is decayed
     

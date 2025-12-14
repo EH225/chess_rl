@@ -43,7 +43,7 @@ def naive_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, **
         # if the game has ended in a checkmate, then the last move from the opponent achieved it and the
         # player to move next has lost, return a value of -1 and None for best_action and action_values
         value = -1 if env.board.is_checkmate() else 0
-        return None, value, None
+        return 0, value, np.zeros()
 
     # Else: Perform a search over possiable next actions in the env from the current starting state
     action_values = []  # Record a value estimate for each possiable next action from the starting state
@@ -206,6 +206,7 @@ def _minimax_search(state: str, model, cache: dict, alpha: float = -float("inf")
 
         return (v, nodes_evaluated) if depth > 0 else (action_vals, nodes_evaluated)
 
+### TODO: Should convert this over to a batched version of minimax search instead
 
 def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, horizon: int = 3, **kwargs
                    ) -> Tuple[int, float, np.ndarray]:
@@ -236,7 +237,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
         best_action, state_value = action_vals.argmax(), action_vals.max()
     else:  # Otherwise, if the input state was terminal, then only a single float value will be returned by
         # the helper function denoting the state's reward for the player whose move it is next
-        return None, action_vals, None
+        return 0, action_vals, np.zeros()
 
     return best_action, state_value, action_vals
 
@@ -475,7 +476,7 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
     cache = {}  # Cache the values output from the model, if we send it the same state 2x re-use prior values
     root = Node(state=state, parent=None)  # Create a search tree root node
     if root.is_terminal:  # If the input state is a terminal state, no searching required, board value known
-        return None, root.terminal_reward, None
+        return 0, root.terminal_reward, np.zeros()
     else:  # Expand the root node to get first generation child nodes
         root.expand_legal_moves(prior_heuristic)
 

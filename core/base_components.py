@@ -206,7 +206,7 @@ class DVN:
 
         # NOTE: The code below is not strictly necessary, the weights are auto-initialized by PyTorch
         else:  # Otherwise if we're not using pre-trained weights, then initialize them randomly
-            print("Initializing parameters randomly")
+            self.logger.info("Initializing parameters randomly")
 
             def init_weights_randomly(m):
                 if hasattr(m, "weight"):
@@ -229,9 +229,9 @@ class DVN:
             try:
                 compile_mode = self.config["model_training"]["compile_mode"]
                 self.v_network = torch.compile(self.v_network, mode=compile_mode)
-                print("Models compiled")
+                self.logger.info("Models compiled")
             except Exception as err:
-                print(f"Model compile attempted, but not supported: {err}")
+                self.logger.info(f"Model compile attempted, but not supported: {err}")
 
     def get_best_action(self, state: str, default: int = None) -> Tuple[int, float, torch.Tensor]:
         """
@@ -439,7 +439,6 @@ class DVN:
                 # Choose and action according to current V Network and exploration parameter epsilon
                 best_action, state_value, action_values = self.get_best_action(state)
                 action = exp_schedule.get_action(best_action)  # Select randomly or use the best_action
-                print("t", t, 'action', action)
 
                 # Store the q values from the learned v_network in the deque data structures
                 q_vals = action_values[0]  # Only 1 action taken so only 1 output given
