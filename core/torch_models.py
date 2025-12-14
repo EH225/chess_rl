@@ -14,6 +14,7 @@ sys.path.insert(0, PARENT_DIR)
 import numpy as np
 import torch, chess
 import torch.nn as nn
+import torch.nn.functional as F
 from core.base_components import DVN
 from utils.general import compute_img_out_dim
 from typing import Tuple, List, Dict
@@ -198,7 +199,7 @@ class CNN(nn.Module):
             ResBlockCNN(128),  # (batch_size, 128, 8, 8)
 
             # Dense fully-connected Block 3
-            nn.flatten(),  # (batch_size, 128, 8, 8) -> (batch_size, 8192)
+            nn.Flatten(),  # (batch_size, 128, 8, 8) -> (batch_size, 8192)
             nn.Linear(128 * 8 * 8, 512),  # (batch_size, 8192) -> (batch_size, 512)
             nn.LeakyReLU(),
             nn.Linear(512, 128),  # (batch_size, 512) -> (batch_size, 128)
@@ -312,11 +313,11 @@ class Transformer(nn.Module):
         """
         super().__init__()
         # Extract config parameters from the passed model config dictionary
-        self.embed_size = config["model"]["embed_size"]
-        self.hidden_size = config["model"]["hidden_size"]
-        self.n_heads = config["model"]["n_heads"]
-        self.num_layers = config["model"]["num_layers"]
-        self.ff_dim = config["model"]["ff_dim"]
+        self.embed_size = int(config["model"]["embed_size"])
+        self.hidden_size = int(config["model"]["hidden_size"])
+        self.n_heads = int(config["model"]["n_heads"])
+        self.num_layers = int(config["model"]["num_layers"])
+        self.ff_dim = int(config["model"]["ff_dim"])
 
         # Create a token-embedding layer for the pieces and castling rights. We have 1 token for blank
         # squares, 6 for friendly pieces, 6 for foe pieces, and 2 castling rights for each player, each with
@@ -327,7 +328,7 @@ class Transformer(nn.Module):
         self.pos_embeddings = nn.Parameter(torch.zeros(1, 64, self.embed_size))
         # Create the multi-headed self-attention transformer blocks, the core of the transformer model
         self.encoder_layer = nn.TransformerEncoderLayer(d_model=self.hidden_size, nhead=self.n_heads,
-                                                        dim_feedforward=self.ff_dim, activation=nn.LeakyReLU,
+                                                        dim_feedforward=self.ff_dim, activation="relu",
                                                         batch_first=True, norm_first=False, bias=True)
         self.encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=self.num_layers,
                                              norm=nn.LayerNorm(self.hidden_size))
@@ -356,9 +357,9 @@ class Transformer(nn.Module):
         :return: A torch.Tensor of size (batch_size, 68, E) containing vector embeddings.
         """
         sym_to_int = {s: (i + 1) for i, s in enumerate("pnbrqk")}  # Mapping from symbol to int starting at 1
-        output = torch.zeros((len(state_batch), 8, 8), dtype=torch.uint8)  # 8 x 8 = 64 squres on a chess
+        output = torch.zeros((len(state_batch), 8, 8), dtype=torch.int)  # 8 x 8 = 64 squres on a chess
         # board, use 0 to denote blank squares, [1, 6] for the friendly pieces and [7, 12] for foe
-        castling = torch.zeros(len(state_batch), 4)  # 4 possiable castling rights to encode
+        castling = torch.zeros(len(state_batch), 4, dtype=torch.int)  # 4 possiable castling rights
 
         for i, state in enumerate(state_batch):  # Add each state in the batch to the output torch.Tensor
             board = chess.Board(state)  # Use the FEN string encoding to create the board
@@ -421,7 +422,7 @@ class Transformer(nn.Module):
         x = self.encoder(x)  # Pass x through the encoder blocks, (batch_size, 68, embed_size)
         # Perform global average pooling across all the output attention vectors to get a final vector
         x = x.mean(axis=1)  # (batch_size, 68, embed_size) -> (batch_size, embed_size)
-        return nn.Tanh(self.proj(x))  # Linear projection to 1 final output value estimate [-1, +1]
+        return F.tanh(self.proj(x))  # Linear projection to 1 final output value estimate [-1, +1]
 
 
 ####################################

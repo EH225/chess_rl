@@ -4,8 +4,8 @@ post-processing pipeline.
 """
 import time, sys, logging, yaml, os
 import numpy as np
+import pandas as pd
 from typing import Tuple, List
-
 import matplotlib
 
 matplotlib.use("agg")
@@ -58,9 +58,10 @@ def save_eval_scores(eval_scores: List[Tuple[float]], save_dir: str) -> None:
     :param save_dir: A directory in which to save the evaluation scores plot and data as a CSV.
     :return: None.
     """
-    eval_scores = np.array(eval_scores)  # Convert from a list of tuples into a (N, 2) ndarray
+    # Convert from a list of tuples into a (N, 2) pd.DataFrame
+    eval_scores = pd.DataFrame(eval_scores, columns=["t", "eval_score"])
     plt.figure(figsize=(8, 4))
-    plt.plot(eval_scores[:, 0], eval_scores[:, 1], zorder=3)
+    plt.plot(eval_scores["t"], eval_scores["eval_score"], zorder=3)
     plt.xlabel("Training Timestep")
     plt.ylabel("Eval Score")
     plt.title("Evaluation Scores During Training")
@@ -69,8 +70,7 @@ def save_eval_scores(eval_scores: List[Tuple[float]], save_dir: str) -> None:
     plt.close()
 
     # Write evaluation scores to a csv file
-    np.savetxt(os.path.join(save_dir, "eval_scores.csv"), eval_scores, delimiter=", ", fmt="% s")
-
+    eval_scores.to_csv(os.path.join(save_dir, "eval_scores.csv"), index=False)
 
 def get_logger(log_filename: str) -> logging.Logger:
     """
@@ -84,6 +84,8 @@ def get_logger(log_filename: str) -> logging.Logger:
     handler.setFormatter(logging.Formatter("%(asctime)s:%(levelname)s: %(message)s"))
     logging.getLogger().addHandler(handler)
     logging.getLogger("chess.engine").setLevel(logging.INFO)  # Supress printouts from the chess env
+    logging.getLogger("PIL").setLevel(logging.INFO)
+    logging.getLogger("PIL.PngImagePlugin").setLevel(logging.INFO)
     return logger
 
 ################################

@@ -23,11 +23,10 @@ from torch.utils.tensorboard import SummaryWriter
 from collections import deque
 from utils.general import get_logger, Progbar
 from utils.replay_buffer import ReplayBuffer
-from utils.chess_env import ChessEnv, save_recording
+from utils.chess_env import ChessEnv, save_recording, save_move_stack
 from utils.general import save_eval_scores
 from utils.evaluate import evaluate_agent_game
 import core.search_algos as search_algos
-
 
 
 #########################################
@@ -52,8 +51,6 @@ class LinearSchedule:
             eps_begin to eps_end linearly.
         :returns: None
         """
-        # msg = f"Param begin ({param_begin}) needs to be greater than or equal to end ({param_end})"
-        # assert param_begin >= param_end, msg
         self.param = param_begin  # epsilon beings at eps_begin
         self.param_begin = param_begin
         self.param_end = param_end
@@ -111,10 +108,6 @@ class LinearExploration(LinearSchedule):
         else:  # With probability (1 - epsilon), return the best_action
             return best_action
 
-### TODO: We should avoid running everything if we're going to select a random action, would make things faster
-
-
-
 
 #####################################
 ### Deep Value-Network Definition ###
@@ -145,6 +138,7 @@ class DVN:
         self.env = env
         self.config = config
         self.logger = logger if logger is not None else get_logger(config["output"]["log_path"])
+        self.record_dir = config["output"]["record_path"]
 
         # These are to be defined when self.initialize_model() is called
         self.v_network, self.optimizer = None, None
@@ -256,7 +250,7 @@ class DVN:
             - The value estimate of this state as a float
             - The estimated Q-values for all possible actions (best action is not always the argmax)
         """
-        if state is None: # If not state provided, then randomly sample from the action space and return a
+        if state is None:  # If not state provided, then randomly sample from the action space and return a
             # collection of 0s for the estimated values of each action
             action = default if default is None else self.env.action_space.sample()
             return action, torch.zeros(self.env.action_space.n)
@@ -341,8 +335,7 @@ class DVN:
         self.summary_writer.add_scalar("Std_Q", self.std_q, t)
         self.summary_writer.add_scalar("Eval_Reward", self.eval_reward, t)
 
-    def search_func(self, state_batch: Union[str, List[str]]
-                    ) -> Tuple[List[float], List[float], List[np.ndarray]]:
+    def search_func(self, state_batch: Union[str, List[str]]) -> Tuple[np.ndarray, List[np.ndarray]]:
         """
         This method applies the search function specified in the config file to each state of the input state
         batch to compute a high-quality estimate of the value of each possiable action.
@@ -357,20 +350,22 @@ class DVN:
             from various starting positions.
         :return: Lists of best_actions (ints), state_values (floats), action_values (np.ndarrays)
         """
-        if isinstance(state_batch, str): # Accept a lone string, convert it to a list of size 1
+        if isinstance(state_batch, str):  # Accept a lone string, convert it to a list of size 1
             state_batch = [state_batch, ]  # All lines below expect state_batch to be a list
 
-        best_actions, state_values, action_values = [], [], []
+        best_actions = np.zeros(len(state_batch), dtype=np.uint16)  # 1 int best action value per state
+        state_values = np.zeros(len(state_batch), dtype=np.float32)  # 1 float state estimate per state
+        action_values = []  # Collect np.arrays in a list, each can be of variable length
 
-        for state in state_batch:
+        for i, state in enumerate(state_batch):
             best_action, state_value, action_vals = self._search_func(state=state, model=self.v_network,
                                                                       **self.config["search_func"])
             # Append the results from the search function evaluation of the state to the output lists
-            best_actions.append(best_action)
-            state_values.append(state_value)
+            best_actions[i] = best_action
+            state_values[i] = state_value
             action_values.append(action_vals)
 
-        return best_actions, state_values, action_values
+        return np.array(best_actions), np.array(state_values), action_values
 
     def calc_loss(self, v_est: torch.Tensor, v_search_est: torch.Tensor, wts: torch.Tensor
                   ) -> Tuple[torch.float, np.ndarray]:
@@ -401,6 +396,9 @@ class DVN:
             - A torch.float giving the MSE loss computed over all examples in the batch.
             - A np.ndarray denoting the |TD errors| for each example
         """
+        assert len(v_est.shape) == 1, f"v_est expected to be 1 dimensional, got {v_est.shape}"
+        msg = "v_search_est expected to be 1 dimensional, got {v_search_est.shape}"
+        assert len(v_search_est.shape) == 1, msg
         td_errors = (v_est - v_search_est).abs()  # Compute the absolute value TD errors
         loss = (wts * td_errors.pow(2)).mean()  # Compute the weighted MSE loss function for all batch obs
         # After computing the loss, we should detach the td_errors from the gradient tracking computational
@@ -425,7 +423,7 @@ class DVN:
         :return: None, modifies the passed objects in place.
         """
         t = 0
-        while t < n_iters:  # Run iterations in the env until we reach the n_iters limit
+        while t <= n_iters:  # Run iterations in the env until we reach the n_iters limit
             episode_reward = 0  # Track the total reward from all actions during the episode
             state = self.env.reset()  # Reset the env to begin a new training episode
             replay_buffer.add_entry(state)  # Add the starting board to the replay buffer
@@ -435,12 +433,13 @@ class DVN:
                 # been truncated by the env or 3). the total training steps taken exceeds nsteps_train
                 t += 1  # Track how many frames have been added to the replay buffer so far
 
-                sys.stdout.write(f"\rPopulating the replay buffer {t}/{n_iters}...")
                 sys.stdout.flush()  # Screen updates while populating the replay buffer
+                sys.stdout.write(f"\rPopulating the replay buffer {t}/{n_iters}...")
 
                 # Choose and action according to current V Network and exploration parameter epsilon
                 best_action, state_value, action_values = self.get_best_action(state)
-                action = exp_schedule.get_action(best_action[0])  # Select randomly or use the best_action
+                action = exp_schedule.get_action(best_action)  # Select randomly or use the best_action
+                print("t", t, 'action', action)
 
                 # Store the q values from the learned v_network in the deque data structures
                 q_vals = action_values[0]  # Only 1 action taken so only 1 output given
@@ -457,7 +456,7 @@ class DVN:
                 # Track the total reward throughout the full episode
                 episode_reward += reward
 
-                state = new_state # Update for next iteration
+                state = new_state  # Update for next iteration
 
                 # End the episode if one of the stopping conditions is met
                 if terminated or truncated or t >= n_iters:
@@ -479,11 +478,11 @@ class DVN:
         # Given the starting state and action, we don't strictly need new_state but we'll accept it anyways
         s0, s1 = chess.Board(state), chess.Board(new_state)
         move = list(s0.legal_moves)[action]
-        color = "white" if s0.turn is chess.WHITE else "black" # Color of the player who made the move
+        color = "white" if s0.turn is chess.WHITE else "black"  # Color of the player who made the move
 
         ep_record["total_moves"] += 1
         outcome = s1.outcome()
-        if outcome: # If the game has ended
+        if outcome:  # If the game has ended
             ep_record["outcome"] = outcome.termination.name
             if outcome.winner is chess.WHITE:
                 ep_record["winner"] = "white"
@@ -496,25 +495,25 @@ class DVN:
             net_material = 0
             for p in s1.piece_map().values():
                 piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece
-                if s1.turn is True and p.symbol().islower(): # For white, lower-case pieces are foes
+                if s1.turn is True and p.symbol().islower():  # For white, lower-case pieces are foes
                     piece_val *= (-1)
-                elif s1.turn is False and p.symbol().isupper(): # For black, upper-case pieces are foes
+                elif s1.turn is False and p.symbol().isupper():  # For black, upper-case pieces are foes
                     piece_val *= (-1)
                 net_material += piece_val
             ep_record["white_material_diff"] = net_material * (-1 if s1.turn is False else 1)
 
         if s0.is_en_passant(move):  # Check if this move was an en passant move
             ep_record[f"{color}_en_passant"] += 1
-        if s0.is_kingside_castling(move): # Check if this move was a king-side castle
+        if s0.is_kingside_castling(move):  # Check if this move was a king-side castle
             ep_record[f"{color}_ks_castle"] += 1
-        if s0.is_queenside_castling(move): # Check if this move was a queen-side castle
+        if s0.is_queenside_castling(move):  # Check if this move was a queen-side castle
             ep_record[f"{color}_ks_castle"] += 1
-        if s0.gives_check(move): # Check if the move creates a check
+        if s0.gives_check(move):  # Check if the move creates a check
             ep_record[f"{color}_checks"] += 1
-        if move.promotion: # Check if this move was a pawn promotion
+        if move.promotion:  # Check if this move was a pawn promotion
             ep_record[f"{color}_promotions"] += 1
 
-        ep_record["state"] = new_state # Record the ending state FEN
+        ep_record["end_state"] = new_state  # Record the ending state FEN
 
     def train(self, exp_schedule: LinearExploration, lr_schedule: LinearSchedule,
               beta_schedule: LinearSchedule) -> None:
@@ -573,8 +572,7 @@ class DVN:
             if self.config["model_training"].get("record"):  # If recording episodes, adjust episode counter
                 # based on the largest cached value in the recordings directory so that any future recordings
                 # continue to be numbered higher than the existing recording numbers
-                record_path = self.config["output"]["record_path"]
-                file_names = [x for x in os.listdir(record_path) if x.endswith('.mp4')]
+                file_names = [x for x in os.listdir(self.record_dir)]
                 if len(file_names) == 0:  # If there are no existing recordings, set the episode count to 0
                     self.env.episode_id = 0
                 else:  # Otherwise use the largest one we can find among them +1
@@ -599,7 +597,10 @@ class DVN:
             else:
                 raise ValueError("Episode DataFrame read from disk is empty")
         else:
-            ep_df = pd.DataFrame(dtype=int, columns=ep_df_cols)
+            ep_df = pd.DataFrame(dtype=float, columns=ep_df_cols)
+
+        for col in ["outcome", "winner", "end_state"]:  # Change these columns to string format
+            ep_df[col] = ep_df[col].astype(str)
 
         prog = Progbar(target=self.config["hyper_params"]["nsteps_train"])  # Training progress bar
 
@@ -611,7 +612,7 @@ class DVN:
             state = self.env.reset()  # Reset the env to begin a new training episode
             replay_buffer.add_entry(state)  # Add the starting board to the replay buffer
 
-            ep_record = pd.Series(0, index=ep_df_cols, dtype=int)  # Entry for addition to the ep_df
+            ep_record = {col: 0 for col in ep_df_cols}  # Entry for addition to the ep_df
             ep_record["episode_id"] = self.env.episode_id
 
             while True:  # Run an episode of obs -> action -> obs -> action in the env until finished which
@@ -655,7 +656,7 @@ class DVN:
                                                        beta_schedule.param)
 
                 if t % self.config["model_training"]["log_freq"] == 0:  # Update logging every so often
-                    if t >= self.config["hyper_params"]["learning_start"]:
+                    if t > self.config["hyper_params"]["learning_start"]:
                         # Wait until the warm-up period has been reached to start logging
                         self.update_averages(episode_rewards, max_q_values, q_values, eval_scores)
                         self.add_summary(loss_eval, grad_eval, t)
@@ -669,11 +670,11 @@ class DVN:
 
                     else:  # If t < self.config["hyper_params"]["learning_start"], within the warm-up period
                         learning_start = self.config['hyper_params']['learning_start']
-                        sys.stdout.write(f"\rPopulating the replay buffer {t}/{learning_start}...")
                         sys.stdout.flush()
+                        sys.stdout.write(f"\rPopulating the replay buffer {t}/{learning_start}...")
                         prog.reset_start()
 
-                state = new_state # Update for next iteration, move to the new FEN state representation
+                state = new_state  # Update for next iteration, move to the new FEN state representation
                 # End the episode if one of the stopping conditions is met
                 if terminated or truncated or t >= self.config["hyper_params"]["nsteps_train"]:
                     break
@@ -681,8 +682,8 @@ class DVN:
             # Perform updates at the end of each episode
             episode_rewards.append(episode_reward)  # Record the total reward received during the last episode
             ep_record["t"] = t
-            ep_df.loc[len(ep_df), :] = ep_record  # Record as a new row in the episode record
-            ep_df.to_csv(ep_df_file_path)  # Write out a new copy of the ep_df for each new record added
+            ep_df.loc[len(ep_df), :] = pd.Series(ep_record)  # Record as a new row in the episode record
+            ep_df.to_csv(ep_df_file_path, index=False)  # Write out a new copy of the ep_df on each update
 
             if (t - last_eval) >= self.config["model_training"]["eval_freq"]:
                 # If it has been more than eval_freq steps since the last time we ran an eval then run again
@@ -691,7 +692,7 @@ class DVN:
                     eval_scores.append(
                         (t, self.evaluate(num_episodes=self.config["model_training"]["num_episodes_test"],
                                           record_last=self.config["model_training"]["record"]))
-                        )  # Compute a new eval score value for the model
+                    )  # Compute a new eval score value for the model
                     save_eval_scores(eval_scores, self.config["output"]["plot_output"])  # Save results
 
         # Final screen updates
@@ -702,7 +703,7 @@ class DVN:
         save_eval_scores(eval_scores, self.config["output"]["plot_output"])
 
         duration = time.time() - start_time
-        self.logger.info(f"Training finished in {duration/60:.1f} minutes")
+        self.logger.info(f"Training finished in {duration / 60:.1f} minutes")
 
     def train_step(self, t: int, replay_buffer: ReplayBuffer, lr: float, beta: float) -> None:
         """
@@ -755,7 +756,7 @@ class DVN:
         # 4). Run a forward pass of the batch of states through the v_network and generate value estimates
         # i.e. what the v_network estimates is the discounted future return of following an optimal policy
         # from each state as the initial starting state
-        v_est = self.v_network(state_batch)  # Returns a torch.Tensor on self.device
+        v_est = self.v_network(state_batch).reshape(-1)  # Returns a torch.Tensor on self.device
 
         # 5). Compute the TD target values using a search function to get more accurate values by looking
         # ahead, we want to train the network to estimate this search function in the forward pass
@@ -765,7 +766,8 @@ class DVN:
         # Convert the inputs for this calculation to torch.Tensor and move to self.device
         wts = torch.from_numpy(wts).to(self.device)
         v_search_est = torch.from_numpy(v_search_est).to(self.device)
-        loss, td_errors = self.calc_loss(v_est, v_search_est, wts) # Loss is on device, td_errors is np.array
+
+        loss, td_errors = self.calc_loss(v_est, v_search_est, wts)  # Loss is on device, td_errors is np.array
         replay_buffer.update_priorities(indices, td_errors)  # Update the priorities for the obs sampled
         loss.backward()  # Compute gradients wrt to the trainable parameters of self.v_network
 
@@ -795,20 +797,26 @@ class DVN:
         :return: The average per episode socre over num_episodes.
         """
         self.logger.info(f"\nRunning Evaluation for {num_episodes} episodes")
+        max_moves = self.config["model_training"]["max_eval_moves"]
         all_losses = []
 
         with logging_redirect_tqdm():
             for g in tqdm(range(num_episodes), ncols=75):
                 # Compute the losses for each move for 1 self-play game
-                ep_losses, move_stack = evaluate_agent_game(self.agent_move_func, return_move_stack=True)
-                all_losses.extend(ep_losses) # Aggregate the losses over all moves and all games
-                self.logger.info(f"Game {g + 1}: ACPL = {sum(ep_losses) / len(ep_losses):.1f}")
+                ep_losses, move_stack = evaluate_agent_game(self.agent_move_func, max_moves=max_moves,
+                                                            return_move_stack=True)
+                all_losses.extend(ep_losses)  # Aggregate the losses over all moves and all games
+                msg = f"Game {g + 1}: ACPL = {sum(ep_losses) / len(ep_losses):.1f}, {len(move_stack)} moves"
+                self.logger.info(msg)
 
         overall_acpl = sum(all_losses) / len(all_losses)
         self.logger.info(f"\nOverall ACPL: {overall_acpl:.1f}")
 
         if record_last is True:  # Save the last evaluation episode as a recording
-            save_recording(move_stack, self.config["output"]["record_path"])
+            output_dir = os.path.join(self.record_dir, f"game-{self.env.episode_id}")
+            os.makedirs(output_dir, exist_ok=True)  # Create an output folder for this game recording
+            save_recording(move_stack, os.path.join(output_dir, f"game-{self.env.episode_id}.mp4"))
+            save_move_stack(move_stack, os.path.join(output_dir, f"game-{self.env.episode_id}.txt"))
 
         return overall_acpl
 
@@ -821,8 +829,8 @@ class DVN:
         :param max_moves: An integer denoting the max number of moves allowed per game.
         :return: None. Records a video of a self-play game and saves it to disk.
         """
-        state = self.env.reset() # Clear out any existing game state and begin fresh
-        self.env.record = True # Toggle on the recording setting within the ChessEnv
+        state = self.env.reset()  # Clear out any existing game state and begin fresh
+        self.env.record = True  # Toggle on the recording setting within the ChessEnv
         # Create a policy function that return the best move index according to the model
         policy = self.policy()
 
@@ -830,8 +838,8 @@ class DVN:
         terminated, truncated = False, False
         while move_counter < max_moves and not (terminated or truncated):
             new_state, reward, terminated, truncated = self.env.step(policy(state))
-            state = new_state # Update for next iteration
+            state = new_state  # Update for next iteration
             move_counter += 1
 
-        state = self.env.reset() # The env reset triggers the steps in the move_stack to be recorded
-        self.env.record = False # Turn off recordings for future env steps
+        state = self.env.reset()  # The env reset triggers the steps in the move_stack to be recorded
+        self.env.record = False  # Turn off recordings for future env steps

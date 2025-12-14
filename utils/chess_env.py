@@ -122,8 +122,8 @@ class ChessEnv:
             save_recording(self.board.move_stack, os.path.join(output_dir, f"game-{self.episode_id}.mp4"))
             save_move_stack(self.board.move_stack, os.path.join(output_dir, f"game-{self.episode_id}.txt"))
 
-        self.state = chess.Board()  # Start with the initial chess board configuration
-        self.action_space = ActionSpace(self.state)  # Init an action space based on the current board
+        self.board = chess.Board()  # Start with the initial chess board configuration
+        self.action_space = ActionSpace(self.board)  # Init an action space based on the current board
         self.episode_id += 1  # Incriment each time a new episode begins
         self.ep_ended, self.step_count = False, 0  # Reset the end flag and episode step counter
         return self.board.fen()  # Return the FEN representation which encodes the full state of the game

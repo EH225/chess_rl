@@ -395,8 +395,9 @@ class Node:
         unvisited_leaf_nodes_chg = 0  # Record how many new unexplored leaf nodes are created
         if not self.is_terminal:  # If not terminal, then there are additional child nodes we can add
             board = chess.Board(self.state)  # Init a chess board object for internal operations
-            uniform_prior = 1 / board.legal_moves.count()
-            for move in board.legal_moves:  # Add a child node for each legal move starting here
+            legal_moves = list(board.legal_moves)
+            uniform_prior = 1 / len(legal_moves)
+            for move in legal_moves:  # Add a child node for each legal move starting here
                 board.push(move)  # Make this move on the board to get the next resulting game state
                 child = Node(state=board.fen(), parent=self)
                 if prior_heuristic is None:  # If no prior_heuristic provided, then set to the unif prior 1/n
@@ -512,7 +513,6 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
 
         with torch.no_grad():
             value_batch = model(state_batch).cpu().reshape(-1).tolist()  # Run in parallel on the GPU
-            value_batch = value_batch.cpu().tolist()  # Move the data from torch to a list on the CPU
         for idx, val_est in zip(leaf_node_idx, value_batch):  # Update the cache with the new model outputs
             cache[leaf_nodes[idx].state_] = val_est
 
