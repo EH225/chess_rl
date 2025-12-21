@@ -13,9 +13,9 @@ output:
     clear_all: True # If set to True, then the output_path is cleared at the start, deletes existing results
 
 search_func: # This defines kwargs that will be passed to the search function from core/search_algos.py
-    name: "naive_search"
-    gamma: 1.00 # The temporal discount factor of future rewards
-    batch_size: 64 # The batch_size used for generating state value estimates
+    name: "monte_carlo_tree_search"
+    batch_size: 32 # The batch_size used for generating state value estimates
+    n_iters: 50 # The number of Monte Carlo tree search iterations to run
 
 model_training:
     record: True

@@ -22,7 +22,7 @@ sys.path.insert(0, CURRENT_DIR)
 import argparse, shutil
 from utils.general import read_yaml
 from utils.chess_env import ChessEnv
-from core.base_components import LinearSchedule, LinearExploration
+from core.base_components import LinearSchedule
 from core.torch_models import ChessAgent
 
 def run_model_training(config_name: str) -> None:
@@ -50,9 +50,9 @@ def run_model_training(config_name: str) -> None:
     env = ChessEnv(record_dir=config["output"]["record_path"])
 
     # 2). Configure the exploration strategy with epsilon decay
-    exp_schedule = LinearExploration(env, float(config["hyper_params"]["eps_begin"]),
-                                     float(config["hyper_params"]["eps_end"]),
-                                     int(config["hyper_params"]["eps_nsteps"]))
+    exp_schedule = LinearSchedule(float(config["hyper_params"]["eps_begin"]),
+                                  float(config["hyper_params"]["eps_end"]),
+                                  int(config["hyper_params"]["eps_nsteps"]))
 
     # 3) Configure the learning rate decay schedule
     lr_schedule = LinearSchedule(float(config["hyper_params"]["lr_begin"]),

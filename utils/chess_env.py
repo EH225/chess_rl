@@ -12,16 +12,37 @@ from typing import Tuple, Dict, Union, List
 import os, chess, cv2, io, chess.svg, cairosvg
 from PIL import Image
 
+def material_diff(state: str) -> float:
+    """
+    Computes the net material difference of the current board state from the perpsective of the player who is
+    to move next where each piece is worth:
+        pawn (1), knight (3), bishop (3), rook (5), queen (9), king (0)
+
+    :param state: A FEN string denoting the current game state.
+    :return: A int value representing the net material difference for the player whose turn it is to go next.
+    """
+    piece_values = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
+    board = chess.Board(state)  # Convert to a chess.Board object to access the piece map
+    net_material = 0
+    for p in board.piece_map().values():
+        piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece
+        if board.turn is True and p.symbol().islower():  # For white, lower-case pieces are foes
+            piece_val *= (-1)
+        elif board.turn is False and p.symbol().isupper():  # For black, upper-case pieces are foes
+            piece_val *= (-1)
+        net_material += piece_val
+
+    return net_material
 
 def board_svg_to_arr(board: chess.Board) -> np.ndarray:
     """
     This function takes in a chess.Board object and converts the svg image representation to a np.ndarray
-    of pixel values for writing frames to an mp4 video files.
+    of pixel values for writing frames to a mp4 video file.
 
     :param board: The input chess.Board from which to extract the svg image of the current board.
     :return: A np.ndarray of the current board including highlights and board annotations.
     """
-    svg = board._repr_svg_()  # Extract the current board svg with annovations and overlays
+    svg = board._repr_svg_()  # Extract the current board svg with annotations and overlays
     png_bytes = cairosvg.svg2png(bytestring=svg.encode())
     img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
     return np.array(img)
@@ -33,7 +54,7 @@ def save_recording(move_stack: List[chess.Move], output_path: str, fps: int = 1)
     that can be executed in a chess.Board env.
 
     :param move_stack: A list of chess.Move objects describing the evolution of the game.
-    :param output_dir: The output path to write the recording to ending in .mp4.
+    :param output_path: The output path to write the recording to ending in .mp4.
     :param fps: Specify a frames-per-second for the output video, a default of 1 second per move is standard.
     :return: None, writes to output_dir instead.
     """
@@ -56,7 +77,7 @@ def save_recording(move_stack: List[chess.Move], output_path: str, fps: int = 1)
             board.push(move_uci)
             out.write(cv2.cvtColor(board_svg_to_arr(board), cv2.COLOR_RGB2BGR))
     except Exception as e:
-        print("Exception occured", e)
+        print("Exception occurred", e)
 
     out.release()  # Make sure to release even if there is an error
     print(f"Recording written to: {output_path}")
@@ -67,7 +88,7 @@ def save_move_stack(move_stack: List[chess.Move], output_path: str) -> None:
     Saves a sequence of moves contained in move_stack to a text file.
 
     :param move_stack: A list of chess.Move objects describing the evolution of the game.
-    :param output_dir: The output path to write the recording to ending in .txt.
+    :param output_path: The output path to write the recording to ending in .txt.
     """
     output_str = " ".join([move.xboard() for move in move_stack])
     try:

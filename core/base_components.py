@@ -22,11 +22,10 @@ from torch.utils.tensorboard import SummaryWriter
 from collections import deque
 from utils.general import get_logger, Progbar
 from utils.replay_buffer import ReplayBuffer
-from utils.chess_env import ChessEnv, save_recording, save_move_stack
+from utils.chess_env import ChessEnv, save_recording, save_move_stack, material_diff
 from utils.general import save_eval_scores
 from utils.evaluate import evaluate_agent_game
 import core.search_algos as search_algos
-
 
 #########################################
 ### Exploration Rate Decay Schedulers ###
@@ -44,8 +43,8 @@ class LinearSchedule:
         Initializes a LinearSchedule object instance with an update() method that will update a parameter
         (e.g. a learning rate or epsilon exploration rate) being tracked at self.param.
 
-        :param eps_begin: The exploration parameter epsilon's starting value.
-        :param eps_end: The exploration parameter epsilon's ending value.
+        :param param_begin: The exploration parameter epsilon's starting value.
+        :param param_end: The exploration parameter epsilon's ending value.
         :param nsteps: The number of steps over which the exploration parameter epsilon will decay from
             eps_begin to eps_end linearly.
         :returns: None
@@ -72,40 +71,6 @@ class LinearSchedule:
         else:  # After nsteps, set param to param_end
             self.param = self.param_end
         return self.param
-
-
-class LinearExploration(LinearSchedule):
-    """
-    Implements an e-greedy exploration strategy with a linear exploration parameter (epsilon) decay.
-    """
-
-    def __init__(self, env, eps_begin: float, eps_end: float, nsteps: int):
-        """
-        Initializes a LinearExploration object instance with an update() method that will update a parameter
-        (i.e. epsilon exploration rate) being tracked at self.param.
-
-        :param env: A gym environment i.e. contains information about the action and state space.
-        :param eps_begin: The exploration parameter epsilon's starting value.
-        :param eps_end: The exploration parameter epsilon's ending value.
-        :param nsteps: The number of steps over which the exploration parameter epsilon will decay from
-            eps_begin to eps_end linearly.
-        :return: None
-        """
-        super(LinearExploration, self).__init__(eps_begin, eps_end, nsteps)
-        self.env = env
-
-    def get_action(self, best_action: int) -> int:
-        """
-        Returns a randomly selected action with probability self.epsilon, otherwise returns the best_action
-        according to the input kwarg provided.
-
-        :param: best_action: An integer denoting the best action according to some policy.
-        :return: An integer denoting an action.
-        """
-        if np.random.rand() < self.param:  # With probability (epsilon) return a randomly selected action
-            return self.env.action_space.sample()
-        else:  # With probability (1 - epsilon), return the best_action
-            return best_action
 
 
 #####################################
@@ -158,6 +123,12 @@ class DVN:
 
         # Configure the search function to be used for this model
         self._search_func = getattr(search_algos, config["search_func"]["name"])
+
+        # Save a set of episode dataframe logging columns
+        self.ep_df_cols = ["t", "episode_id", "outcome", "winner", "total_moves", "white_material_diff",
+                           "white_checks", "black_checks", "white_promotions", "black_promotions",
+                           "white_en_passant", "black_en_passant", "white_ks_castle", "black_ks_castle",
+                           "white_qs_castle", "black_qs_castle", "end_state"]
 
     def initialize_model(self) -> None:
         """
@@ -232,12 +203,12 @@ class DVN:
             except Exception as err:
                 self.logger.info(f"Model compile attempted, but not supported: {err}")
 
-    def get_best_action(self, state: str, default: int = None) -> Tuple[int, float, torch.Tensor]:
+    def get_best_action(self, state: str, default: int = None) -> Tuple[int, float, np.ndarray]:
         """
         This method is called by the train() and evaluate() methods to generate the best action at a given
         starting state, which is found by using the search function of this model and the current parameters
         of the v_network. This function returns the best action for the given input state, the overall
-        estimate of the state's value, and also the value estimates for each possiable action as well.
+        estimate of the state's value, and also the value estimates for each possible action as well.
 
         :param state: A FEN (Forsyth–Edwards Notation) representation of the game state denoting the location
             of the pieces on the board, who is to move next, who can castle, en passant etc.
@@ -256,9 +227,10 @@ class DVN:
 
         with torch.no_grad():  # Gradient tracking is not needed for this online action-selection step
             # Use the search function to generate what the best action would be according to the model
+            print(f"env step state: {state}")  ### TODO: Temp for testing
             best_actions, state_values, action_values = self.search_func(state)
 
-        return best_actions[0], state_values[0], action_values
+        return best_actions[0], state_values[0], action_values[0]
 
     @property
     def policy(self) -> Callable:
@@ -273,7 +245,7 @@ class DVN:
         current policy and greedy evaluation.
 
         :param board: An input chess.Board object representing the current game state.
-        :return: A chess.Move that is the best action accroding to the learned RL model.
+        :return: A chess.Move that is the best action according to the learned RL model.
         """
         best_action, state_value, action_values = self.get_best_action(board.fen())
         return list(board.legal_moves)[best_action]
@@ -337,7 +309,7 @@ class DVN:
     def search_func(self, state_batch: Union[str, List[str]]) -> Tuple[np.ndarray, List[np.ndarray]]:
         """
         This method applies the search function specified in the config file to each state of the input state
-        batch to compute a high-quality estimate of the value of each possiable action.
+        batch to compute a high-quality estimate of the value of each possible action.
 
         Returns the best_actions (ints), state_values (floats), action_values (np.ndarrays) where:
             - best_actions: A list of integers denoting the best action as per the search function
@@ -404,7 +376,7 @@ class DVN:
         # graph so that when we make updates to the replay buffer, gradients aren't being tracked there
         return loss, td_errors.detach().cpu().numpy()  # (torch.float, np.ndarray of size (batch_size, ))
 
-    def _populate_buffer(self, replay_buffer: ReplayBuffer, exp_schedule: LinearExploration,
+    def _populate_buffer(self, replay_buffer: ReplayBuffer, exp_schedule: LinearSchedule,
                          episode_rewards: deque, max_q_values: deque, q_values: deque, n_iters: int) -> None:
         """
         Helper method for populating the replay buffer and other training performance tracking variables
@@ -412,9 +384,8 @@ class DVN:
         we resume training, it helps to populate the replay buffer with values before sampling from it.
 
         :param replay_buffer: A ReplayBuffer object which will have n_iters frames added to it.
-        :param exp_schedule: A LinearExploration instance where exp_schedule.get_action(best_action) return
-            an action that is either A). randomly selected or B). best_action and controlled by the internal
-            epsilon parameter value.
+        :param exp_schedule: A LinearSchedule instance where exp_schedule.param gives the internal epsilon
+            parameter value.
         :param episode_rewards: A deque tracking recent full-episode rewards.
         :param max_q_values: A deque tracking recent max q-values.
         :param q_values: A deque tracking recent average q-values.
@@ -436,14 +407,15 @@ class DVN:
                 sys.stdout.write(f"\rPopulating the replay buffer {t}/{n_iters}...")
 
                 # Choose and action according to current V Network and exploration parameter epsilon
-                ## TODO: Skip the search process if we're going to select randomly
-                best_action, state_value, action_values = self.get_best_action(state)
-                action = exp_schedule.get_action(best_action)  # Select randomly or use the best_action
+                if np.random.rand() < exp_schedule.param:  # With probability epsilon, choose a random action
+                    action, state_value, action_values = self.env.action_space.sample(), 0, np.zeros(0)
+                else:  # Otherwise actually use the model to evaluate
+                    action, state_value, action_values = self.get_best_action(state)
 
                 # Store the q values from the learned v_network in the deque data structures
-                q_vals = action_values[0]  # Only 1 action taken so only 1 output given
-                max_q_values.append(np.max(q_vals))  # Keep track of the max q-value
-                q_values.append(np.mean(q_vals))  # Keep track of the avg q-valu
+                if len(action_values) > 0:
+                    max_q_values.append(np.max(action_values))  # Keep track of the max q-value
+                    q_values.append(np.mean(action_values))  # Keep track of the avg q-value
 
                 # Perform the selected action in the env, get the new state, reward, and stopping flags
                 new_state, reward, terminated, truncated = self.env.step(action)
@@ -474,7 +446,7 @@ class DVN:
         :param new_state: The FEN string of the next game state after 1 move.
         :return: None, edits are made in-place to the existing ep_record series.
         """
-        # Given the starting state and action, we don't strictly need new_state but we'll accept it anyways
+        # Given the starting state and action, we don't strictly need new_state, but we'll accept it anyway
         s0, s1 = chess.Board(state), chess.Board(new_state)
         move = list(s0.legal_moves)[action]
         color = "white" if s0.turn is chess.WHITE else "black"  # Color of the player who made the move
@@ -490,16 +462,7 @@ class DVN:
             else:
                 ep_record["winner"] = "none"
             # If the game is over, then also record the net material difference from white's perspective
-            piece_values = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
-            net_material = 0
-            for p in s1.piece_map().values():
-                piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece
-                if s1.turn is True and p.symbol().islower():  # For white, lower-case pieces are foes
-                    piece_val *= (-1)
-                elif s1.turn is False and p.symbol().isupper():  # For black, upper-case pieces are foes
-                    piece_val *= (-1)
-                net_material += piece_val
-            ep_record["white_material_diff"] = net_material * (-1 if s1.turn is False else 1)
+            ep_record["white_material_diff"] = material_diff(new_state) * (-1 if s1.turn is False else 1)
 
         if s0.is_en_passant(move):  # Check if this move was an en passant move
             ep_record[f"{color}_en_passant"] += 1
@@ -514,7 +477,7 @@ class DVN:
 
         ep_record["end_state"] = new_state  # Record the ending state FEN
 
-    def train(self, exp_schedule: LinearExploration, lr_schedule: LinearSchedule,
+    def train(self, exp_schedule: LinearSchedule, lr_schedule: LinearSchedule,
               beta_schedule: LinearSchedule) -> None:
         """
         Runs a full training loop to train the parameters of self.v_network using the reply buffer.
@@ -523,9 +486,8 @@ class DVN:
         The learning rate is gradually decayed over time and controlled by lr_schedule. The amount of
         importance sampling bias correction is controlled by beta_schedule.
 
-        :param exp_schedule: A LinearExploration instance where exp_schedule.get_action(best_action) returns
-            an action that is either A). randomly selected or B). best_action and controlled by the internal
-            epsilon parameter value.
+        :param exp_schedule: A LinearSchedule instance where exp_schedule.param gives the internal epsilon
+            parameter value.
         :param lr_schedule: A schedule for the learning rate where lr_schedule.param tracks it over time.
         :param beta_schedule: A schedule for the beta used in replay buffer weighted sampling.
         :return: None. Model weights and outputs are saved to disk periodically and also at the end.
@@ -584,19 +546,15 @@ class DVN:
                                              record_last=self.config["model_training"]["record"])))
 
         # Look for an existing copy of an episode summary dataframe on disk if one exists
-        ep_df_cols = ["t", "episode_id", "outcome", "winner", "total_moves", "white_material_diff",
-                      "white_checks", "black_checks", "white_promotions", "black_promotions",
-                      "white_en_passant", "black_en_passant", "white_ks_castle", "black_ks_castle",
-                      "white_qs_castle", "black_qs_castle", "end_state"]
-        ep_df_file_path = os.path.join(self.config["output"]["plot_output"], "ep_history.csv")
-        if os.path.exists(ep_df_file_path):  # Check if an ep_history file has been cached
+        ep_df_file_path = os.path.join(self.config["output"]["plot_output"], "train_ep_history.csv")
+        if os.path.exists(ep_df_file_path):  # Check if an eval_ep_history file has been cached
             ep_df = pd.read_csv(ep_df_file_path)  # Read in the data from disk
             if len(ep_df) > 0:
                 self.env.episode_id = ep_df["episode_id"].iloc[-1]
             else:
                 raise ValueError("Episode DataFrame read from disk is empty")
         else:
-            ep_df = pd.DataFrame(dtype=float, columns=ep_df_cols)
+            ep_df = pd.DataFrame(dtype=float, columns=self.ep_df_cols)
 
         for col in ["outcome", "winner", "end_state"]:  # Change these columns to string format
             ep_df[col] = ep_df[col].astype(str)
@@ -611,7 +569,7 @@ class DVN:
             state = self.env.reset()  # Reset the env to begin a new training episode
             replay_buffer.add_entry(state)  # Add the starting board to the replay buffer
 
-            ep_record = {col: 0 for col in ep_df_cols}  # Entry for addition to the ep_df
+            ep_record = {col: 0 for col in self.ep_df_cols}  # Entry for addition to the ep_df
             ep_record["episode_id"] = self.env.episode_id
 
             while True:  # Run an episode of obs -> action -> obs -> action in the env until finished which
@@ -629,13 +587,16 @@ class DVN:
                 # the q_vals associated with each potential action that is available. Utilize the epsilon
                 # exploration parameter, this does not require tracking gradients since we're interacting
                 # with the env to generate data rather than computing a gradient update.
-                best_action, state_value, action_values = self.get_best_action(state)
-                action = exp_schedule.get_action(best_action)  # Select randomly or use the best_action
+                if np.random.rand() < exp_schedule.param:  # With probability epsilon, choose a random action
+                    action, state_value, action_values = self.env.action_space.sample(), 0, np.zeros(0)
+                else:  # Otherwise actually use the model to evaluate
+                    print("Train env step", state)  ## TODO: temp print statement only
+                    action, state_value, action_values = self.get_best_action(state)
 
                 # Store the q values from the search process in the deque data structures
-                q_vals = action_values[0]  # Only 1 action taken so only 1 output given
-                max_q_values.append(np.max(q_vals))  # Keep track of the max q-value returned
-                q_values.append(np.mean(q_vals))  # Keep track of the avg q-value returned by the v_network
+                if len(action_values) > 0:
+                    max_q_values.append(np.max(action_values))  # Keep track of the max q-value returned
+                    q_values.append(np.mean(action_values))  # Keep track of the avg q-value returned
 
                 # Perform the selected action in the env, get the new state, reward, and stopping flags
                 new_state, reward, terminated, truncated = self.env.step(action)
@@ -711,7 +672,7 @@ class DVN:
         :param t: The timestep of the current iteration.
         :param reply_buffer: A reply buffer used for sampling recent env transition observations.
         :param lr: A float denoting the learning rate to use for this update.
-        :param beta: A hyper-parameter used in prioritized experience replay sampling.
+        :param beta: A hyperparameter used in prioritized experience replay sampling.
         :return: None.
         """
         loss_eval, grad_eval = 0, 0
@@ -736,7 +697,7 @@ class DVN:
 
         :param replay_buffer: A ReplayBuffer instance where .sample() gives us batches.
         :param lr: The learning rate to use when making gradient descent updates to self.v_network.
-        :param beta: A hyper-parameter used in prioritized experience replay sampling.
+        :param beta: A hyperparameter used in prioritized experience replay sampling.
         :return: The loss = (y - y_hat)^2 and the total norm of the parameter gradients.
         """
         batch_size = self.config["hyper_params"]["batch_size"]
@@ -759,14 +720,17 @@ class DVN:
 
         # 5). Compute the TD target values using a search function to get more accurate values by looking
         # ahead, we want to train the network to estimate this search function in the forward pass
-        best_action, v_search_est, action_values = self.search_func(state_batch)  # torch.Tensors on device
+        print("state_batch for training step:")  ## TODO: Temp debug testing
+        for s in state_batch:
+            print(f"\t{s}")
+        best_actions, v_search_estimates, action_values = self.search_func(state_batch)
 
         # 6). Compute gradients wrt to the MSE Loss function
         # Convert the inputs for this calculation to torch.Tensor and move to self.device
         wts = torch.from_numpy(wts).to(self.device)
-        v_search_est = torch.from_numpy(v_search_est).to(self.device)
+        v_search_estimates = torch.from_numpy(v_search_estimates).to(self.device)
 
-        loss, td_errors = self.calc_loss(v_est, v_search_est, wts)  # Loss is on device, td_errors is np.array
+        loss, td_errors = self.calc_loss(v_est, v_search_estimates, wts)  # td_errors is a np.array
         replay_buffer.update_priorities(indices, td_errors)  # Update the priorities for the obs sampled
         loss.backward()  # Compute gradients wrt to the trainable parameters of self.v_network
 
@@ -799,14 +763,56 @@ class DVN:
         max_moves = self.config["model_training"]["max_eval_moves"]
         all_losses = []
 
+        # Look for a eval_ep_history.csv on disk if there is one, otherwise create a new ep_df to record in
+        ep_df_file_path = os.path.join(self.config["output"]["plot_output"], "eval_ep_history.csv")
+        if os.path.exists(ep_df_file_path):  # Check if an eval_ep_history file has been cached
+            ep_df = pd.read_csv(ep_df_file_path)  # Read in the data from disk
+        else:
+            ep_df = pd.DataFrame(dtype=float, columns=self.ep_df_cols)
+
+        for col in ["outcome", "winner", "end_state"]:  # Change these columns to string format
+            ep_df[col] = ep_df[col].astype(str)
+
+
         with logging_redirect_tqdm():
             for g in tqdm(range(num_episodes), ncols=75):
                 # Compute the losses for each move for 1 self-play game
                 ep_losses, move_stack = evaluate_agent_game(self.agent_move_func, max_moves=max_moves,
                                                             return_move_stack=True)
                 all_losses.extend(ep_losses)  # Aggregate the losses over all moves and all games
-                msg = f"Game {g + 1}: ACPL = {sum(ep_losses) / len(ep_losses):.1f}, {len(move_stack)} moves"
-                self.logger.info(msg)
+                if verbose is True:
+                    msg = f"Game {g + 1}: ACPL = {sum(ep_losses) / len(ep_losses):.1f}, {len(move_stack)}"
+                    msg += " moves total"
+                    self.logger.info(msg)
+
+                # Re-play the match using move_stack and record values in ep_df as we go to log a summary of
+                # how the game went and what happened during it
+                env = ChessEnv(record_dir=self.config["output"]["record_path"])
+                ep_record = {col: 0 for col in self.ep_df_cols}  # Entry for addition to the ep_df
+                n_row = len(ep_df)
+                ep_record["t"] = 0  # Fill with zeros, not applicable here
+                ep_record["episode_id"] = n_row  # Number the episodes in order
+
+                state = env.reset()
+                for move in move_stack:
+                    print("move", move)
+                    print(env.action_space.actions)
+                    action = list(env.action_space.actions).index(move)
+                    new_state, reward, terminated, truncated = self.env.step(action)
+
+                    # Update the episode record which tabulates key events using (s, a, s')
+                    self.update_ep_record(ep_record, state, action, new_state)
+
+                if not terminated and len(move_stack) == max_moves: # If the last move doesn't end the game,
+                    # and the max_moves were reached in the move_stack, then record that the eval game was
+                    # truncated early by the max_moves limit
+                    ep_record["outcome"] = "TRUNCATED"
+                    ep_record["winner"] = "none"
+                    sign_flip = -1 if self.env.board.turn is False else 1
+                    ep_record["white_material_diff"] = material_diff(new_state) * sign_flip
+
+                ep_df.loc[n_row, :] = pd.Series(ep_record)  # Record as a new row in the episode record
+                ep_df.to_csv(ep_df_file_path, index=False)  # Write out a new copy of the ep_df on each update
 
         overall_acpl = sum(all_losses) / len(all_losses)
         self.logger.info(f"\nOverall ACPL: {overall_acpl:.1f}")

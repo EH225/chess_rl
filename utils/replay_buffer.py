@@ -44,7 +44,7 @@ class ReplayBuffer:
         The max state capacity of the replay buffer is specified by the size input. Game states are
         represented by their FEN encoding.
 
-        eps and alpha are hyper-parameters related to the Prioritized Experience Replay (PER) sampling.
+        eps and alpha are hyperparameters related to the Prioritized Experience Replay (PER) sampling.
 
         :param size: The max number of states to record in the buffer. When the buffer size is full and a new
             entry is added, the oldest obs are overwritten, FIFO inventory management is used.
@@ -128,7 +128,8 @@ class ReplayBuffer:
         if self.alpha > 0:  # Use priority sampling, when alpha == 0, then we're using uniform sampling
             probs = (self.priority[:self.num_in_buffer] + self.eps) ** self.alpha  # Compute the priority wts
             probs /= probs.sum()  # Normalized to be a probability vector
-            indices = self.rng.multinomial(batch_size, probs)  # Samples with replacement but that's okay
+            # indices = self.rng.multinomial(batch_size, probs)  # Samples with replacement but that's okay
+            indices = self.rng.choice(len(probs), size=batch_size, replace=False, p=probs)
             wts = (1 / (probs[indices] * batch_size)) ** beta  # Extract the relevant weights
             wts /= wts.max()  # Normalize by the sum of weights to prevent extreme gradients
         else:  # Otherwise, use naive sampling where all indices have an equal change of being selected

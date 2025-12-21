@@ -357,9 +357,9 @@ class Transformer(nn.Module):
         :return: A torch.Tensor of size (batch_size, 68, E) containing vector embeddings.
         """
         sym_to_int = {s: (i + 1) for i, s in enumerate("pnbrqk")}  # Mapping from symbol to int starting at 1
-        output = torch.zeros((len(state_batch), 8, 8), dtype=torch.int)  # 8 x 8 = 64 squres on a chess
+        output = torch.zeros((len(state_batch), 8, 8), dtype=torch.int)  # 8 x 8 = 64 squares on a chess
         # board, use 0 to denote blank squares, [1, 6] for the friendly pieces and [7, 12] for foe
-        castling = torch.zeros(len(state_batch), 4, dtype=torch.int)  # 4 possiable castling rights
+        castling = torch.zeros(len(state_batch), 4, dtype=torch.int)  # 4 possible castling rights
 
         for i, state in enumerate(state_batch):  # Add each state in the batch to the output torch.Tensor
             board = chess.Board(state)  # Use the FEN string encoding to create the board

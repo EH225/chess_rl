@@ -9,6 +9,7 @@ PARENT_DIR = os.path.dirname(CURRENT_DIR)
 sys.path.insert(0, PARENT_DIR)
 
 import asyncio, subprocess
+
 asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 import chess

@@ -72,6 +72,7 @@ def save_eval_scores(eval_scores: List[Tuple[float]], save_dir: str) -> None:
     # Write evaluation scores to a csv file
     eval_scores.to_csv(os.path.join(save_dir, "eval_scores.csv"), index=False)
 
+
 def get_logger(log_filename: str) -> logging.Logger:
     """
     Returns a logging.Logger instance that will write log outputs to a filepath specified.
@@ -87,6 +88,7 @@ def get_logger(log_filename: str) -> logging.Logger:
     logging.getLogger("PIL").setLevel(logging.INFO)
     logging.getLogger("PIL.PngImagePlugin").setLevel(logging.INFO)
     return logger
+
 
 ################################
 ### Progbar Class Definition ###
