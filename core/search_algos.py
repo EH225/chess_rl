@@ -109,7 +109,9 @@ class Node_MMS:
         # it if the current player is the root_turn player since the prior player was the opponent
         self.reward = reward * (-1 if board.turn is self.root_turn else 1)
         self.maximize = self.root_turn is self.node_turn  # A bool if this node is a maximization node
-        self.unexplored_actions = list(range(board.legal_moves.count()))  # Stack of actions from this state
+        # Maintain a list of actions from this state that we have not yet created child nodes for, go in order
+        # from smallest to largest when creating new actions i.e. start with action 0, 1, 2... etc.
+        self.unexplored_actions = list(range(board.legal_moves.count()))[::-1]
         self.children = []  # Maintain pointers to each child node
 
         if parent is not None: # alpha and beta values are inherited from parent nodes, alpha and beta values
@@ -232,7 +234,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
                 # that the minimizer can select a value of beta somewhere else at the same level as this node
                 # therefore the minimizer 1 level up will never pick this node since the value of this node
                 # will be at least node.value which is worse than what the minimizer can get elsewhere.
-                node.update_tree(3) # Unnecessary to explore any further child nodes, prune instead
+                node.update_tree() # Unnecessary to explore any further child nodes, prune instead
 
             elif node.maximize is False and node.beta <= node.alpha:
                 # node.value is the game score the minimizer can guarentee from pathways beyond this current
@@ -241,7 +243,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
                 # that the maximizer can select a value of alpha somewhere else at the same level as this node
                 # therefore the maximizer 1 level up will never pick this node since the value of this node
                 # will be at most node.value which is worse than what the maximizer can get elsewhere.
-                node.update_tree(4) # Unnecessary to explore any further child nodes, prune instead
+                node.update_tree() # Unnecessary to explore any further child nodes, prune instead
 
             else: # If we're not pruning the further children of this node, explore the next one
                 node_stack.append(node)  # Append again since we will want to come back to evaluate if this
@@ -278,7 +280,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
     # Once finished with the search process, extract the best action, overall state est, and action values
     action_values = np.array([child.reward + child.value * gamma for child in root.children])
     best_action, state_value = action_values.argmax(), action_values.max()
-    return best_action, state_value, action_values, root
+    return best_action, state_value, action_values
 
 
 ####################################
@@ -560,9 +562,9 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
 
 #### TODO: DEBUG TESTING ####
 if __name__ == "__main__":
-    # state = 'r1bqkb1r/pppp1ppp/5n2/4n3/P1B1P3/8/1PPP1PPP/RNB1K1NR b KQkq - 0 5' # Regular board
+    state = 'r1bqkb1r/pppp1ppp/5n2/4n3/P1B1P3/8/1PPP1PPP/RNB1K1NR b KQkq - 0 5' # Regular board
     state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/7q/5N1P/2PPPPP1/RNBQKB1R b KQkq - 2 5'  # 1 move away from checkmate
-    # state = 'rnb1k1r1/pPppnppp/4p3/2b5/7q/5N1P/2PPPPP1/RNBQKB1R w KQq - 1 8'  # Pawn promotion
+    state = 'rnb1k1r1/pPppnppp/4p3/2b5/7q/5N1P/2PPPPP1/RNBQKB1R w KQq - 1 8'  # Pawn promotion
     board = chess.Board(state)
     dummy_model = lambda x: torch.rand(len(x)) * 2 - 1  # TEMP sample model, fill in for a value approximator
 
@@ -579,16 +581,15 @@ if __name__ == "__main__":
     # print(action_values)
     # print(nodes_evaluated)
 
-    best_action, state_value, action_values, root = minimax_search(state, dummy_model, gamma=1, horizon=4)
+    best_action, state_value, action_values = minimax_search(state, dummy_model, gamma=1, horizon=4)
     print("best_action", best_action) # Should pick 13
     print("state_value", state_value)
     print("action_values", action_values) # Should be 46 actions from the initial board state
     ### These results don't really make sense for a depth of 1, we should be able to see the winning move
     ### For a depth of 2, it seems that we are calling update tree more than once per node
+    print(list(board.legal_moves)[best_action])
 
     # Compute how many total nodes evaluated at the end by using a recursive algo
-
-    ### root.value doesn't make sense, need to check what's going on here
 
     def count_total_nodes(node) -> int:
         total = 1 # Count this node itself as 1
@@ -605,8 +606,8 @@ if __name__ == "__main__":
                 total += count_leaf_nodes(child)
             return total
 
-    print(count_total_nodes(root)) # 991
-    print(count_leaf_nodes(root)) # 946
+    # print(count_total_nodes(root)) # 991
+    # print(count_leaf_nodes(root)) # 946
 
     ### TODO: Also the values we get here should never exceed 1, so need to figure out why that is happening
     ### How are we getting values > 1 here? That doesn't make sense at all!!
