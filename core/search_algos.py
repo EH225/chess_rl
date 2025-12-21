@@ -43,7 +43,7 @@ def naive_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, **
         # if the game has ended in a checkmate, then the last move from the opponent achieved it and the
         # player to move next has lost, return a value of -1 and None for best_action and action_values
         value = -1 if env.board.is_checkmate() else 0
-        return 0, value, np.zeros()
+        return None, value, np.zeros(0)
 
     # Else: Perform a search over possiable next actions in the env from the current starting state
     action_values = []  # Record a value estimate for each possiable next action from the starting state
@@ -90,11 +90,74 @@ def naive_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, **
 ######################################
 # TODO: Section marker
 
-def _minimax_search(state: str, model, cache: dict, alpha: float = -float("inf"), beta: float = float("inf"),
-                    gamma: float = 1.0, depth: int = 0, max_depth: int = 3, maximize: bool = True
-                    ) -> Tuple[int, float, np.ndarray]:
+class Node_MMS:
     """
-    Recursive helper function for implementing minimax search with alpha-beta pruning.
+    Class object for a search tree node used in Minimax Search (MMS) with alpha-beta pruning.
+    """
+    def __init__(self, state: str, parent: Optional[Node_MMS] = None, gamma: float = 1.0,
+                 reward: float = 0.0):
+        self.state = state  # Record the FEN state encoding of this game state
+        self.state_ = " ".join(state.split()[:-1])  # Remove the total move counter from the FEN
+        board = chess.Board(state)  # Init a chess board obj for internal ops, skip recording to save memory
+        self.parent = parent  # Record a pointer to this node's parent node, will be None if this is the root
+        self.gamma = gamma  # Temporal discount factor
+        # Make note of whose turn it is (white or black) at the root node. If parent is None, then this is a
+        # root node, record from the current game state, otherwise inherit from this from the parent node
+        self.root_turn = board.turn if parent is None else parent.root_turn
+        self.node_turn = board.turn  # Record the turn value for this game state's next-to-move
+        # The reward is generated from the env from the perspective of the prior player to move, so we flip
+        # it if the current player is the root_turn player since the prior player was the opponent
+        self.reward = reward * (-1 if board.turn is self.root_turn else 1)
+        self.maximize = self.root_turn is self.node_turn  # A bool if this node is a maximization node
+        self.unexplored_actions = list(range(board.legal_moves.count()))  # Stack of actions from this state
+        self.children = []  # Maintain pointers to each child node
+
+        if parent is not None: # alpha and beta values are inherited from parent nodes, alpha and beta values
+            # only travel downwards in the tree, not upwards. Higher up values of alpha and beta are updated
+            # when node values are updated
+            self.alpha, self.beta = parent.alpha, parent.beta # Inherit from above
+            self.depth = self.parent.depth + 1
+        else:  # Otherwise for the root node, init alpha and beta at (-inf, inf)
+            self.alpha, self.beta = -float("inf"), float("inf")
+            self.depth = 0 # Root nodes have a depth of zero, depth = actions taken from root
+
+        self.is_terminal = board.is_game_over()
+        if self.is_terminal: # If the game is over, then record the value of starting in this state as 0
+            self.value = 0 # since there are no further moves that can be made
+        else: # Value keeps track of the best value seen so far for the current node among its children
+            self.value = -float("inf") if self.maximize is True else float("inf")
+        self.fully_expanded = False  # Track if the node has been fully expanded i.e. update_tree called on it
+
+    def update_tree(self) -> None:
+        """
+        This method is called when a node has been fully expanded i.e. if it is terminal, at max depth, or
+        has had all of it's child nodes fully expanded. This method propagates the current nodes information
+        up the tree until it reaches the root node. This method is only called 1x per node.
+        """
+        assert not self.fully_expanded, "update_tree method called more than once on the same node"
+        # reward = payoff immediately from taking the action leading from parent -> child
+        # value = the best value the player playing at node can get starting at node and playing thereafter
+        self.fully_expanded = True  # Once this method is called, the node is fully expanded
+        val = self.reward + self.gamma * self.value  # If terminal, then self.value == 0
+        node = self.parent
+        while node is not None: # Iterate through nodes from leaf to root and update as we go
+            if node.maximize: # Node is a maximizer turn
+                node.value = max(node.value, val)  # Will always select the max among the child node values
+                node.alpha = max(node.alpha, val)  # Track the best obtainable value
+            else:  # Node is a minimizer turn instead
+                node.value = min(node.value, val)  # Will always select the min among the child node values
+                node.beta = min(node.beta, val)  # Track the best obtainable value
+
+            # Update val for next iteration at this node's parent node (if any)
+            val = node.reward + node.gamma * node.value
+            node = node.parent # Update the node pointer for next iteration, move to the parent of this node
+
+
+def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, horizon: int = 3, **kwargs
+                   ) -> Tuple[int, float, np.ndarray]:
+    """
+    Performs minimax-search with alpha-beta pruning up to a particular search horizon after which the model
+    is used as a value approximator for each state to perform bootstrapping.
 
     Minimax search performs an exhaustive search through the game tree to evaluate all possible moves from
     the current starting position until either a terminal state is reached or a max depth, at which point a
@@ -110,116 +173,13 @@ def _minimax_search(state: str, model, cache: dict, alpha: float = -float("inf")
     from the minimzer of 3. Then when evaluating the second child node, the maximizer will be looking for
     something that is >= 3. If during the expansion of that node, we find that a value of 2 is an option for
     the minimizer at that node, that will be an upper bound for anything the minimizer chooses for that node.
-    Therefore, we can stop expanding branches along the second child node since we now know that max value of
-    the node will be 2 and the maximizer will always prefer the first child node over it instead.
-
-    If the input state is a terminal state or max_depth == 0, then (state_val, nodes_evaluated) will be
-    returned, otherwise (action_vals, nodes_evaluated) will be returned where action_vals is a list of
-    estimated state values for each possible action from the current initial state which can be used to find
-    the best action and overall state value estimate.
+    Therefore, we can stop expanding branches along the second child node since we now know the max value of
+    that node will be 2 and the maximizer will always prefer the first child node over it instead.
 
     :param state: A FEN string denoting the current game state.
     :param model: A value function approximator that produces board value estimates from the perspective of
         the players whose turn it is with model(state_batch) where state_batch is a list of FEN strings.
-    :param cache: A dictionary-like data structure used for caching values from model to reduce repeat calcs.
-    :param alpha: A lower bound for what the maximizer can get from selecting another node at the same level.
-    :param beta: An upper bound for what the minimizer can get from selecting another node at the same level.
     :param gamma: The temporal discount factor to apply to distant rewards. For chess this is usually 1.0.
-    :param depth: The depth of the node currently being evaluated. The root node has a depth of 0. Intuitively
-        depth is a measure of how many moves (black and white) have been made since the initial state.
-    :param max_depth: This limits the max depth of nodes in the search tree. When depth==max_depth, then
-        model(state) is used to estimate the value of the state instead of further searching.
-    :param maximize: A bool indicating whether the player looking at the current node is trying to maximize.
-    :return:
-        - action_vals (List[int] or int): A list of state value estimates for each action or 1 float value.
-        - nodes_evaluated (int): The total number of nodes evaluated in the search tree.
-    """
-    assert isinstance(max_depth, int) and max_depth >= 0, "max_depth must be >= 0 and an integer"
-    env = ChessEnv(initial_state=state)  # Instantiate the current game state
-
-    if env.ep_ended:  # Check if this is a terminal state, if checkmate then the current player lost
-        return ((-1 if maximize else 1) if env.board.is_checkmate() else 0), 1
-
-    elif depth == max_depth:  # If this node is at the maximal depth, then use the model to estimate the value
-        state = " ".join(state.split()[:-1])  # Remove the full move counter from the state FEN string
-        if state in cache:  # Check if this state has already been predicted using the model
-            val = cache[state]  # If so, then use the pre-computed cached value to save compute
-        else:  # Otherwise, if not yet computed, then compute and cache the output of the model
-            with torch.no_grad():  # Disable grad-tracking, not needed since no gradient step being taken
-                val = model([state, ]).cpu().reshape(-1).tolist()[0]
-            cache[state] = val
-        return (val * (1 if maximize else -1)), 1
-
-    else:  # Otherwise continue to explore moves in the search tree recursively
-        nodes_evaluated = 0  # Track the total number of nodes evaluated (leaf + middle)
-        v = alpha if maximize is True else beta
-        if depth == 0:  # At the root node, return a list of action values instead of a float
-            action_vals = []
-
-        for action in range(env.action_space.n):
-            next_state, reward, terminated, truncated = env.step(action)
-            reward = reward * (1 if maximize else -1)  # Flip if needed for the perspective of the maximizer
-
-            if maximize is True:  # A turn from the perspective of the original player who will want to
-                # maximize the overall value of the game
-                if not terminated:  # If the game continues further, recursively evaluate
-                    val, n = _minimax_search(next_state, model, cache, v, beta, gamma, depth + 1,
-                                             max_depth, False)
-                    v = max(v, reward + gamma * val)  # Update the value of this node from the view of max
-                else:  # Otherwise the value of this action is equal to the reward obtained
-                    val, n = 0, 1  # No further states to explore, next_state is terminal
-                    v = max(v, reward)
-
-                if v >= beta:  # Use early stopping to prune branches. v is the estimate so far of what we
-                    # can get as the maximizer from pathways beyond this current node. As the maximizer, we
-                    # will select the highest value among the children. Therefore the current value of v is
-                    # a lower bound as to what the maximizer will select. beta tells us that the minimizer
-                    # can select at value of at least beta somewhere else at the same level, therefore it will
-                    # never pick this node since the value will be at least v or higher as we maximize, thus
-                    # we stop exploring the child nodes since this node will never be selected be min
-                    return v, nodes_evaluated
-
-            else:  # A turn from the perspective of the opposing player who will want to minimize the overall
-                # value of the game
-                if not terminated:  # If the game continues further, recursively evaluate
-                    val, n = _minimax_search(next_state, model, cache, alpha, v, gamma, depth + 1,
-                                             max_depth, True)
-                    v = min(v, reward + gamma * val)
-                else:  # Otherwise the value of this action is equal to the reward obtained
-                    val, n = 0, 1  # No further states to explore, next_state is terminal
-                    v = min(v, reward)
-
-                if v <= alpha:  # Use early stopping to prune branches. v is the estimate so far of what we
-                    # can get as the minimizer from pathways beyond this current node. As the minimizer, we
-                    # will select the lowest value among the children. Therefore the current value of v is
-                    # an upper bound as to what the minimizer will select. alpha tells us that the maximizer
-                    # can select a value of at least alpha somewhere else at the same level, therefore it will
-                    # never pick this node since the value will be at most v or lower as we minimize, thus
-                    # we stop exploring the child nodes since this node will never be selected be max
-                    return v, nodes_evaluated
-
-            nodes_evaluated += n  # Track how many total nodes were evaluated in the recursive call
-            if depth == 0:  # Record the estimated value of each action that can be taken
-                action_vals.append(reward + gamma * val)
-            env.rev_step()  # Back track in the env for the next action
-        nodes_evaluated += 1  # Add 1 more now that we've finished evaluating this root node
-
-        return (v, nodes_evaluated) if depth > 0 else (action_vals, nodes_evaluated)
-
-### TODO: Should convert this over to a batched version of minimax search instead
-
-def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, horizon: int = 3, **kwargs
-                   ) -> Tuple[int, float, np.ndarray]:
-    """
-    Performs minimax-search with alpha-beta pruning up to a particular search horizon after which the model
-    is used as a state value approximator to perform bootstrapping.
-
-    See _minimax_search for details.
-
-    :param state: A FEN string denoting the current game state.
-    :param gamma: The temporal discount factor to apply to distant rewards. For chess this is usually 1.0.
-    :param model: A value function approximator that produces board value estimates from the perspective of
-        the players whose turn it is with model(state_batch) where state_batch is a list of FEN strings.
     :param batch_size: The size of the state_batch (a list of strings) fed to model.
     :param hoirzon: The max depth of the search tree at which point the model is used to estimate values
         instead.
@@ -228,37 +188,97 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
         - state_value (float): The estimated value of the input starting state.
         - action_values (np.ndarray): The estimated value of each possiable next action.
     """
-    # Reply on the helper function to run the minimax search with alpha-beta pruning
-    action_vals, nodes_evaluated = _minimax_search(state=state, model=model, cache={}, alpha=-float("inf"),
-                                                   beta=float("inf"), gamma=gamma, depth=0,
-                                                   max_depth=horizon, maximize=True)
-    if isinstance(action_vals, list):  # A list will be returned when state is non-terminal
-        action_vals = np.array(action_vals)
-        best_action, state_value = action_vals.argmax(), action_vals.max()
-    else:  # Otherwise, if the input state was terminal, then only a single float value will be returned by
-        # the helper function denoting the state's reward for the player whose move it is next
-        return 0, action_vals, np.zeros()
+    board = chess.Board(state)  # Compute the reward obtained by the root player by reaching the inital state
+    reward = (-1 if board.is_checkmate() else 1) if board.is_game_over() else 0
+    root = Node_MMS(state=state, parent=None, reward=reward)  # Create a search tree root node
+    if root.is_terminal or horizon == 0:  # If the root node is a terminal state, no searching to be done
+        return None, root.reward, np.zeros(0)
 
-    return best_action, state_value, action_vals
+    # Run minimax search with alpha-beta pruning using DFS with batched leaf-evaluation
+    cache = {}  # Cache model evaluations so that they don't need to be re-run
+    eval_batch = []  # Collect nodes for batched model evaluation
 
+    node_stack = [root]  # Maintain a stack of nodes to run expansions of or to revisit
+    while node_stack:  # Iterate until all searching has been done
+        node = node_stack.pop()
 
-### Create a little bit better of a board estimator, count the material differences
-def material_heuristic1(state_batch: List[str]) -> torch.Tensor:
-    output = torch.zeros(len(state_batch))
-    val_dict = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 10, "k": 0}
-    for i, s in enumerate(state_batch):
-        board = chess.Board(s)
-        net_material = 0
-        for p in board.piece_map().values():
-            piece_val = val_dict[p.symbol().lower()]
-            if board.turn and p.symbol().islower():
-                piece_val *= -1
-            elif not board.turn and p.symbol().isupper():
-                piece_val *= -1
-            net_material += piece_val
+        if node.is_terminal: # No further searching possible, update the parent node with the terminal value
+            node.update_tree()
 
-        output[i] = net_material
-    return output
+        elif node.depth == horizon:  # No further searching, use the model to estimate the node's value
+            node_value = cache.get(node.state_, None) # Check if already pre-computed
+            if node_value is None: # If not pre-computed, add to the next evaluation batch for delayed update
+                eval_batch.append(node)
+            else: # If the state's model eval is pre-cached and available, then update the parent node now
+                node.value = node_value * (1 if node.maximize else -1)
+                node.update_tree()
+
+        elif node.unexplored_actions: # If there are still unexplored actions, explore all child nodes
+            # Check for alpha-beta pruning conditions. If met, then no further searching is needed along this
+            # branch, stop further child node evaluation and update the parent of this node
+
+            if node.parent:  # Pull from above to see if there is an updated value of alpha or beta
+                if node.maximize:  # Evaluations may have updated this node's parent, pull in an updated value
+                    # of beta i.e. the best the minimizer parent can get among its options which includes node
+                    node.beta = node.parent.beta
+                else: # Evaluations may have updated this node's parent, pull in an updated value of alpha
+                    # i.e. the best the maximizer parent can get among its options which includes tis node
+                    node.alpha = node.parent.alpha
+
+            if node.maximize is True and node.alpha >= node.beta:
+                # node.value is the game score the maximizer can guarentee from pathways beyond this current
+                # node. The maximizer will select the highest value among the children. Therefore the current
+                # value of node.value is a lower bound as to what the maximizer will select. beta tells us
+                # that the minimizer can select a value of beta somewhere else at the same level as this node
+                # therefore the minimizer 1 level up will never pick this node since the value of this node
+                # will be at least node.value which is worse than what the minimizer can get elsewhere.
+                node.update_tree(3) # Unnecessary to explore any further child nodes, prune instead
+
+            elif node.maximize is False and node.beta <= node.alpha:
+                # node.value is the game score the minimizer can guarentee from pathways beyond this current
+                # node. The minimizer will select the lowest value among the children. Therefore the current
+                # value of node.value is an upper bound as to what the minimizer will select. alpha tells us
+                # that the maximizer can select a value of alpha somewhere else at the same level as this node
+                # therefore the maximizer 1 level up will never pick this node since the value of this node
+                # will be at most node.value which is worse than what the maximizer can get elsewhere.
+                node.update_tree(4) # Unnecessary to explore any further child nodes, prune instead
+
+            else: # If we're not pruning the further children of this node, explore the next one
+                node_stack.append(node)  # Append again since we will want to come back to evaluate if this
+                # node has additional children in the future, and if not, then to update its parent with the
+                # value of the node once all child exploration has finished
+
+                action = node.unexplored_actions.pop() # Get the next action to consider (an int)
+                env = ChessEnv(initial_state=node.state) # Create a ChessEnv to model actions
+                next_state, reward, terminated, truncated = env.step(action)
+                node_stack.append(Node_MMS(state=next_state, parent=node, gamma=gamma, reward=reward))
+                node.children.append(node_stack[-1]) # Add a pointer from the parent node to the child node
+
+        else:  # The node is non-terminal, not at max depth, but also doesn't have any further unexplored
+            # child nodes, so nothing to do here no update_tree() call needed, each leaf node triggers it
+            node.fully_expanded = True
+
+        # After each node exploration / expansion operation, check if the eval_batch is full and should be
+        # run through the model or if there are no further nodes on the stack i.e. run the last set of evals
+        if len(eval_batch) == batch_size or len(node_stack) == 0:
+            # If the eval_batch has reached batch_size or if the node_stack for further exploration is
+            # depleted, then evaluate the nodes contained in eval_batch and update the tree accordingly
+            state_batch = [node.state for node in eval_batch]  # Extract a list of FEN state encodings (str)
+            with torch.no_grad(): # Compute the state estimates according to the model
+                value_batch = model(state_batch).cpu().reshape(-1).tolist()
+
+            for node, value in zip(eval_batch, value_batch): # Update the tree with these value estimates
+                # Record the value approximation of this node and deal with sign flipping to make the value
+                # estimate from the perspective of the root node (a maximizer node)
+                node.value = value * (1 if node.maximize else -1)
+                node.update_tree()  # Once populated, backup the update throughout the tree
+
+            eval_batch = [] # Once this batch is finished, clear out the buffer for the next batch of nodes
+
+    # Once finished with the search process, extract the best action, overall state est, and action values
+    action_values = np.array([child.reward + child.value * gamma for child in root.children])
+    best_action, state_value = action_values.argmax(), action_values.max()
+    return best_action, state_value, action_values, root
 
 
 ####################################
@@ -296,12 +316,12 @@ def material_heuristic(state: str) -> float:
     return np.clip(net_material / 39, -1, 1)
 
 
-class Node:
+class Node_MCTS:
     """
-    Class object used in Monte Carlo Tree Search (MCTS).
+    Class object for a search tree node used in Monte Carlo Tree Search (MCTS).
     """
 
-    def __init__(self, state: str, parent: Optional[Node]):
+    def __init__(self, state: str, parent: Optional[Node_MCTS]):
         """
         Instantiates a MCTS tree node.
 
@@ -342,7 +362,7 @@ class Node:
         """
         return self.value_sum / self.n_visits if self.n_visits > 0 else self.prior
 
-    def argmax_PUCT_child(self) -> Optional[Node]:
+    def argmax_PUCT_child(self) -> Optional[Node_MCTS]:
         """
         Uses Prior-Guided Upper Bound Confidence Intervals for Trees (PUCT) to select a child action with a
         virtual loss to discourage making the same selections multiple times.
@@ -400,7 +420,7 @@ class Node:
             uniform_prior = 1 / len(legal_moves)
             for move in legal_moves:  # Add a child node for each legal move starting here
                 board.push(move)  # Make this move on the board to get the next resulting game state
-                child = Node(state=board.fen(), parent=self)
+                child = Node_MCTS(state=board.fen(), parent=self)
                 if prior_heuristic is None:  # If no prior_heuristic provided, then set to the unif prior 1/n
                     child.prior = uniform_prior
                 else:  # If a prior_heuristic is given, then use it to generate a prior for each child node
@@ -474,9 +494,9 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
         - action_values (np.ndarray): The estimated value of each possiable next action.
     """
     cache = {}  # Cache the values output from the model, if we send it the same state 2x re-use prior values
-    root = Node(state=state, parent=None)  # Create a search tree root node
+    root = Node_MCTS(state=state, parent=None)  # Create a search tree root node
     if root.is_terminal:  # If the input state is a terminal state, no searching required, board value known
-        return 0, root.terminal_reward, np.zeros()
+        return None, root.terminal_reward, np.zeros(0)
     else:  # Expand the root node to get first generation child nodes
         root.expand_legal_moves(prior_heuristic)
 
@@ -542,7 +562,7 @@ def monte_carlo_tree_search(state: str, model, prior_heuristic: Callable, batch_
 if __name__ == "__main__":
     # state = 'r1bqkb1r/pppp1ppp/5n2/4n3/P1B1P3/8/1PPP1PPP/RNB1K1NR b KQkq - 0 5' # Regular board
     state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/7q/5N1P/2PPPPP1/RNBQKB1R b KQkq - 2 5'  # 1 move away from checkmate
-    state = 'rnb1k1r1/pPppnppp/4p3/2b5/7q/5N1P/2PPPPP1/RNBQKB1R w KQq - 1 8'  # Pawn promotion
+    # state = 'rnb1k1r1/pPppnppp/4p3/2b5/7q/5N1P/2PPPPP1/RNBQKB1R w KQq - 1 8'  # Pawn promotion
     board = chess.Board(state)
     dummy_model = lambda x: torch.rand(len(x)) * 2 - 1  # TEMP sample model, fill in for a value approximator
 
@@ -559,10 +579,44 @@ if __name__ == "__main__":
     # print(action_values)
     # print(nodes_evaluated)
 
-    # best_action, state_value, action_values  = minimax_search(state, dummy_model, gamma=1, horizon=3)
-    # print("best_action", best_action)
-    # print("state_value", state_value)
-    # print("action_values", action_values)
+    best_action, state_value, action_values, root = minimax_search(state, dummy_model, gamma=1, horizon=4)
+    print("best_action", best_action) # Should pick 13
+    print("state_value", state_value)
+    print("action_values", action_values) # Should be 46 actions from the initial board state
+    ### These results don't really make sense for a depth of 1, we should be able to see the winning move
+    ### For a depth of 2, it seems that we are calling update tree more than once per node
+
+    # Compute how many total nodes evaluated at the end by using a recursive algo
+
+    ### root.value doesn't make sense, need to check what's going on here
+
+    def count_total_nodes(node) -> int:
+        total = 1 # Count this node itself as 1
+        for child in node.children:
+            total += count_total_nodes(child)
+        return total
+
+    def count_leaf_nodes(node) -> int:
+        if len(node.children) == 0:
+            return 1
+        else:
+            total = 0
+            for child in node.children:
+                total += count_leaf_nodes(child)
+            return total
+
+    print(count_total_nodes(root)) # 991
+    print(count_leaf_nodes(root)) # 946
+
+    ### TODO: Also the values we get here should never exceed 1, so need to figure out why that is happening
+    ### How are we getting values > 1 here? That doesn't make sense at all!!
+
+    ### Something is wacky here with the rewards and the state values, need to look more into this
+
+
+
+
+
 
     ## Test Monte Carlo Tree Search
     best_action, state_value, action_values, root = monte_carlo_tree_search(state, dummy_model,
@@ -579,11 +633,28 @@ if __name__ == "__main__":
 
     def max_depth(node, d=0):
         if not node.children:  # Recursion base-case
-            return 1
+            return 0
         else:
             return max([max_depth(child) + 1 for child in node.children])
 
-    # print("max_depth(root)", max_depth(root))
 
-    ## TODO:
-    ## Figure out what is wrong with the minimax search, why is it giving me so many 1s?
+
+
+
+    ### Create a little bit better of a board estimator, count the material differences
+    def material_heuristic1(state_batch: List[str]) -> torch.Tensor:
+        output = torch.zeros(len(state_batch))
+        val_dict = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 10, "k": 0}
+        for i, s in enumerate(state_batch):
+            board = chess.Board(s)
+            net_material = 0
+            for p in board.piece_map().values():
+                piece_val = val_dict[p.symbol().lower()]
+                if board.turn and p.symbol().islower():
+                    piece_val *= -1
+                elif not board.turn and p.symbol().isupper():
+                    piece_val *= -1
+                net_material += piece_val
+
+            output[i] = net_material
+        return output

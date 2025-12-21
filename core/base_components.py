@@ -17,7 +17,6 @@ from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 from typing import Callable, List, Tuple, Union
 
-## TODO: Clean these up at some point, delete out old stuff no longer in use
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from collections import deque
@@ -437,6 +436,7 @@ class DVN:
                 sys.stdout.write(f"\rPopulating the replay buffer {t}/{n_iters}...")
 
                 # Choose and action according to current V Network and exploration parameter epsilon
+                ## TODO: Skip the search process if we're going to select randomly
                 best_action, state_value, action_values = self.get_best_action(state)
                 action = exp_schedule.get_action(best_action)  # Select randomly or use the best_action
 
