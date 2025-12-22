@@ -73,12 +73,7 @@ class MLP(nn.Module):
             nn.Linear(128, 1),
             nn.Tanh()
         )  # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
-
-    def get_device(self) -> str:
-        """
-        Returns the device of the model parameters.
-        """
-        return next(self.model.parameters()).device
+        self.device = next(self.model.parameters()).device
 
     def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -140,7 +135,7 @@ class MLP(nn.Module):
         # Add info about castling rights and how close are to a draw based on the 50-move rule
         output = torch.concatenate([output, extra_info], dim=1)  # (B, 384) +  (B, 5) =  (B, 389)
         # Move the model_input to the required device so it can be run through the network before returning
-        return output.to(self.get_device())
+        return output.to(self.device)
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -212,12 +207,7 @@ class CNN(nn.Module):
             nn.Linear(128, 1),  # (batch_size, 128) -> (batch_size, 1)
             nn.Tanh()
         )  # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
-
-    def get_device(self) -> str:
-        """
-        Returns the device of the model parameters.
-        """
-        return next(self.model.parameters()).device
+        self.device = next(self.model.parameters()).device
 
     def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -286,7 +276,7 @@ class CNN(nn.Module):
             output[i, 16, :, :] = min(board.halfmove_clock, 100) / 100.0  # Scale to be [0, 1]
 
         # Move the model_input to the required device so it can be run through the network before returning
-        return output.to(self.get_device())
+        return output.to(self.device)
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -344,12 +334,6 @@ class Transformer(nn.Module):
                                              norm=nn.LayerNorm(self.hidden_size))
         self.proj = nn.Linear(self.embed_size, 1)  # Final linear projection after pooling to 1 output value
         self.device = next(self.encoder.parameters()).device
-
-    def get_device(self) -> str:
-        """
-        Returns the device of the model parameters.
-        """
-        return next(self.model.parameters()).device
 
     def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -415,7 +399,7 @@ class Transformer(nn.Module):
         output = output.reshape(len(state_batch), -1)  # Reshape to (batch_size, 64) to flatten
 
         # Add the additional 4 tokens for castling rights and move to the required device
-        output = torch.concat([output, castling], dim=1).to(self.get_device())  # (batch_size, 68) ints
+        output = torch.concat([output, castling], dim=1).to(self.device)  # (batch_size, 68) ints
 
         # Pass these token integers through the embedding layer to convert them into embedding vectors
         output = self.token_embeddings(output)  # (batch_size, 68, embed_size)
