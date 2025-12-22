@@ -10,7 +10,8 @@ sys.path.insert(0, PARENT_DIR)
 
 import asyncio, subprocess
 
-asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import chess
 import chess.engine
