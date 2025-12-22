@@ -182,6 +182,7 @@ class DVN:
 
         # 3). Now that we have the model and weights initialized, move them to the appropriate device
         self.v_network = self.v_network.to(self.device)
+        self.v_network.device = self.device  # Update the device of the model after moving it
 
         for state in self.optimizer.state.values():  # Move the optimizer's state to the model's device
             for k, v in state.items():
