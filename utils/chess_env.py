@@ -12,6 +12,7 @@ from typing import Tuple, Dict, Union, List
 import os, chess, cv2, io, chess.svg, cairosvg
 from PIL import Image
 
+
 def material_diff(state: str) -> float:
     """
     Computes the net material difference of the current board state from the perpsective of the player who is
@@ -33,6 +34,63 @@ def material_diff(state: str) -> float:
         net_material += piece_val
 
     return net_material
+
+
+def create_ep_record(move_stack: List[chess.Move]) -> Dict:
+    """
+    This method takes in a move_stack of legal moves from an original board starting position and runs
+    them through the chess game env and records key info about what occured during it along the way i.e.
+    what the outcome was, how many checks were made by each side, pawn promotions etc.
+
+    If the game has not reached a terminal state by the end of move_stack, then the outcome will be
+    recorded as Truncated.
+
+    :param move_stack: A list of chess.Moves objects denoting the evolution of the game.
+    :return: A dictionary with key info from the progression of the game recorded in move_stack.
+    """
+    board = chess.Board()  # Start off with a blank board
+    ep_df_cols = ["episode_id", "outcome", "winner", "total_moves", "white_material_diff", "white_checks",
+                  "black_checks", "white_promotions", "black_promotions", "white_en_passant",
+                  "black_en_passant", "white_ks_castle", "black_ks_castle", "white_qs_castle",
+                  "black_qs_castle", "end_state"]
+    ep_record = {col: 0 for col in ep_df_cols} # Record key info in a dictionary
+
+    for move in move_stack:  # Re-play the game again, apply each move
+        color = "white" if board.turn is chess.WHITE else "black"  # Color of the player to move next
+
+        # Record key info about the move that is about to be made
+        if board.is_en_passant(move):  # Check if this move is an en passant move
+            ep_record[f"{color}_en_passant"] += 1
+        if board.is_kingside_castling(move):  # Check if this move is a king-side castle
+            ep_record[f"{color}_ks_castle"] += 1
+        if board.is_queenside_castling(move):  # Check if this move is a queen-side castle
+            ep_record[f"{color}_ks_castle"] += 1
+        if board.gives_check(move):  # Check if the move creates a check
+            ep_record[f"{color}_checks"] += 1
+        if move.promotion:  # Check if this move is a pawn promotion
+            ep_record[f"{color}_promotions"] += 1
+
+        board.push(move) # Make the next move in the sequence of moves to update the state
+
+    outcome = board.outcome()
+    if outcome: # Check if the game has ended after the last move was made
+        ep_record["outcome"] = outcome.termination.name
+        if outcome.winner is chess.WHITE:
+            ep_record["winner"] = "white"
+        elif outcome.winner is chess.BLACK:
+            ep_record["winner"] = "black"
+        else:
+            ep_record["winner"] = "none"
+    else: # Otherwise record the outcome as Truncated if the game hasn't yet ended
+        ep_record["outcome"] = "TRUNCATED"
+        ep_record["winner"] = "none"
+
+    sign_flip = (1 if board.turn == chess.WHITE else 1)
+    ep_record["white_material_diff"] = material_diff(board.fen()) * sign_flip
+    ep_record["total_moves"] = len(move_stack)
+    ep_record["end_state"] = board.fen()  # Record the ending state FEN
+    return ep_record
+
 
 def board_svg_to_arr(board: chess.Board) -> np.ndarray:
     """
