@@ -586,7 +586,7 @@ class DVN:
             episode_rewards.append(episode_reward)  # Record the total reward received during the last episode
             ep_record = create_ep_record(self.env.board.move_stack)
             ep_record["t"] = t  # Add the training timestap as well to the logged info
-            self.update_ep_history(ep_record, prefix="eval")  # Record game summary in the csv cache
+            self.update_ep_history(ep_record, prefix="train")  # Record game summary in the csv cache
 
         # Final screen updates
         self.logger.info("Training done.")
