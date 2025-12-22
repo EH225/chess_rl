@@ -31,11 +31,11 @@ model_training:
 
 hyper_params:
     nsteps_train: 1000000 # The number of total training timesteps to run
-    batch_size: 128 # The batch size when sampling training examples from the replay buffer
+    batch_size: 32 # The batch size when sampling training examples from the replay buffer
     buffer_size: 500000 # The frame capacity of the replay buffer
     gamma: 1.00 # The temporal discount factor of future rewards
     learning_freq: 100 # The frequency of update to the v_network model parameters, how many env steps until an update
-    learning_updates: 3 # The number of learning update batches run each at each update interval 
+    learning_updates: 4 # The number of learning update batches run each at each update interval 
     learning_start: 300 # A warm-up period before any training begins
     wt_decay: 0.0001 # Set an L2 regularization amount
 

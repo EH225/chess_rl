@@ -2,7 +2,6 @@
 model: "MLP_Agent_Debug" # Name of the model being trained, determines the output directory name
 model_class: "MLP" # Should match one of the model classes in core/torch_models.py
 
-
 output:
     output_path: &output_path "results/MLP_Agent_Debug/" # Directory of training results
     model_output: !join_path [*output_path, "saved_weights/"] # Location of saved model weights

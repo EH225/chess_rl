@@ -628,6 +628,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
 
 #### TODO: DEBUG TESTING ####
 if __name__ == "__main__":
+    import time
     state = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'  # Default starting state
     state = 'r1bqkb1r/pppp1ppp/5n2/4n3/P1B1P3/8/1PPP1PPP/RNB1K1NR b KQkq - 0 5'  # Regular board
     state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/7q/5N1P/2PPPPP1/RNBQKB1R b KQkq - 2 5'  # 1 move away from checkmate
@@ -650,8 +651,10 @@ if __name__ == "__main__":
     # print(list(board.legal_moves)[best_action])
 
     # Test Monte Carlo Tree Search
+    # start_time = time.time()
     # best_action, state_value, action_values = monte_carlo_tree_search(state, dummy_model, 32, 500,
     #                                                                   material_heuristic)
+    # print(f"Runtime: {time.time() - start_time:.2f}s")
     # print("best_action", best_action)
     # print("state_value", state_value)
     # print("action_values", action_values)
