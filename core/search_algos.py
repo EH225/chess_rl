@@ -110,7 +110,7 @@ def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **
     if env.ep_ended:  # If the episode has already ended, then there is no searching over action to be done
         # The value is always computed from the perspective of the player who is to move next in the state,
         # if the game has ended in a checkmate, then the last move from the opponent achieved it and the
-        # player to move next has lost, return a value of -1 and None for best_action and action_values
+        # player to move next has lost, return a value of -1 and 9999 for best_action as a placeholder
         value = -1 if env.board.is_checkmate() else 0
         return 9999, value, np.zeros(0)
 
@@ -268,11 +268,18 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
         - state_value (float): The estimated value of the input starting state.
         - action_values (np.ndarray): The estimated value of each possible next action.
     """
-    board = chess.Board(state)  # Compute the reward obtained by the root player by reaching the initial state
-    reward = (-1 if board.is_checkmate() else 1) if board.is_game_over() else 0
-    root = Node_MMS(state=state, parent=None, reward=reward)  # Create a search tree root node
-    if root.is_terminal or horizon == 0:  # If the root node is a terminal state, no searching to be done
+    board = chess.Board(state)  # Compute the reward that would have been generated on the move prior to
+    # reaching the current game state i.e. +1 reward for the prior player if the board is now a checkmate
+    # and 0 otherwise (i.e. for intermediate moves or any kind of draw condition)
+    reward = 1 if board.is_checkmate() else 0
+    root = Node_MMS(state=state, parent=None, reward=reward)  # Reward flipping done internally
+    if root.is_terminal:  # If a terminal state, no searching to be done, use 9999 as the best action
+        # placeholder since an integer is expected to be returned
         return 9999, root.reward, np.zeros(0)
+    elif horizon == 0:  # If the horizon is zero, then use the model to evaluate and return that value
+        with torch.no_grad():
+            vale_est = model([state]).cpu().reshape(-1).tolist()[0]
+        return 9999, vale_est, np.zeros(0)
 
     # Run minimax search with alpha-beta pruning using DFS with batched leaf-evaluation
     cache = {}  # Cache model evaluations so that they don't need to be re-run
@@ -487,7 +494,7 @@ class Node_MCTS:
             # are all positive and sum to 1 across all actions (children)
             normed_priors = softmax([child.prior for child in self.children])
             for i, prior_val in enumerate(normed_priors):  # Update values after applying softmax collectively
-                self.children[i] = prior_val
+                self.children[i].prior = prior_val
 
             node = self  # Back propagate the update for unvisited_leaf_nodes to the root node
             while node is not None:
@@ -625,6 +632,7 @@ if __name__ == "__main__":
     state = 'r1bqkb1r/pppp1ppp/5n2/4n3/P1B1P3/8/1PPP1PPP/RNB1K1NR b KQkq - 0 5'  # Regular board
     state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/7q/5N1P/2PPPPP1/RNBQKB1R b KQkq - 2 5'  # 1 move away from checkmate
     state = 'rnb1k1r1/pPppnppp/4p3/2b5/7q/5N1P/2PPPPP1/RNBQKB1R w KQq - 1 8'  # Pawn promotion
+    state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/8/5N1P/2PPPqP1/RNBQKB1R w KQkq - 0 6' # Checkmate
     board = chess.Board(state)
     dummy_model = lambda x: torch.rand(len(x)) * 2 - 1  # TEMP sample model, fill in for a value approximator
 
@@ -634,12 +642,7 @@ if __name__ == "__main__":
     # print("state_value", state_value)
     # print("action_values", action_values)
 
-    # Test the minimax search algorithm
-    # action_values, nodes_evaluated = _minimax_search(state, dummy_model, {}, max_depth=3)
-    # # returns results, the winning set of moves isn't that broad
-    # print(action_values)
-    # print(nodes_evaluated)
-
+    ## Test the Minimax Search Algo
     # best_action, state_value, action_values = minimax_search(state, dummy_model, gamma=1, horizon=4)
     # print("best_action", best_action) # Should pick 13
     # print("state_value", state_value)
@@ -647,14 +650,14 @@ if __name__ == "__main__":
     # print(list(board.legal_moves)[best_action])
 
     # Test Monte Carlo Tree Search
-    best_action, state_value, action_values = monte_carlo_tree_search(state, dummy_model, 32, 200,
-                                                                      material_heuristic)
-    print("best_action", best_action)
-    print("state_value", state_value)
-    print("action_values", action_values)
+    # best_action, state_value, action_values = monte_carlo_tree_search(state, dummy_model, 32, 500,
+    #                                                                   material_heuristic)
+    # print("best_action", best_action)
+    # print("state_value", state_value)
+    # print("action_values", action_values)
 
-    board = chess.Board(state)
-    legal_moves = list(board.legal_moves)
-    for i, x in enumerate(action_values):
-        if x == 1:
-            print(legal_moves[i])
+    # board = chess.Board(state)
+    # legal_moves = list(board.legal_moves)
+    # for i, x in enumerate(action_values):
+    #     if x == 1:
+    #         print(legal_moves[i])
