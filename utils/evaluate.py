@@ -11,7 +11,7 @@ sys.path.insert(0, PARENT_DIR)
 import asyncio, subprocess
 
 if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     STOCKFISH_PATH = rf"{os.path.join(PARENT_DIR, 'stockfish/stockfish-windows-x86-64-avx2.exe')}"
 else:
     STOCKFISH_PATH = rf"{os.path.join(PARENT_DIR, 'stockfish/stockfish-ubuntu-x86-64-avx2')}"

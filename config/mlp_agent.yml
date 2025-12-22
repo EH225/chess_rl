@@ -10,7 +10,7 @@ output:
     plot_output: *output_path # Location of eval scores during training summary plot and csv data
     record_path: !join_path [*output_path, "recordings/"] # Location of where to save episode recordings
     tensorboard: !join_path [*output_path, "tensorboard/"] # Location to save tensorboard log files
-    clear_all: True # If set to True, then the output_path is cleared at the start, deletes existing results
+    clear_all: False # If set to True, then the output_path is cleared at the start, deletes existing results
 
 search_func: # This defines kwargs that will be passed to the search function from core/search_algos.py
     name: "monte_carlo_tree_search"
