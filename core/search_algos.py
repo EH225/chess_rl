@@ -13,6 +13,7 @@ sys.path.insert(0, PARENT_DIR)
 import numpy as np
 import torch, chess
 from utils.chess_env import ChessEnv
+from scipy.special import softmax
 from typing import Tuple, List, Callable, Optional
 
 
@@ -405,14 +406,16 @@ class Node_MCTS:
 
     def Q(self) -> float:
         """
-        Returns the average of all rewards backpropagated though this node i.e. value_sum / n_visits.
+        Returns the average of all rewards backpropagated though this node i.e. value_sum / n_visits. If the
+        node has never been visited before, then the returned value is 0 (a neutral value between -1 and +1,
+        the two max values we could have).
         """
-        return self.value_sum / self.n_visits if self.n_visits > 0 else self.prior
+        return self.value_sum / self.n_visits if self.n_visits > 0 else 0
 
     def argmax_PUCT_child(self) -> Optional[Node_MCTS]:
         """
-        Uses Prior-Guided Upper Bound Confidence Intervals for Trees (PUCT) to select a child action with a
-        virtual loss to discourage making the same selections multiple times.
+        Uses Predictor Upper Confidence Bound for Trees (PUCT) to select a child action with a virtual loss
+        to discourage making the same selections multiple times.
 
         This method returns None if this node has no children (i.e. is a terminal state), otherwise it returns
         a pointer to the argmax child node according to the PUCT with virtual loss formula:
@@ -451,21 +454,22 @@ class Node_MCTS:
         """
         This method expands the current node i.e. adds unexplored child nodes to self.children if applicable
         (i.e. if this node is non-terminal) and sets self.is_expanded to True. The child nodes created have
-        their prior values set by prior_heuristic(child.state) if provided, otherwise a uniform prior of
-        1 / num_actions is used where num_actions == n_children.
+        their prior values set by softmax(prior_heuristic(child.state)) if provided, otherwise a uniform prior
+        of 1 / num_actions is used where num_actions == n_children. The prior values are configured to sum to
+        1 across all actions
 
         :param prior_heuristic: A heuristic function for computing a prior value for each child node added.
             Should be a function that takes the FEN state (str) as its first argument and returns the value
             estimate for the player whose move is next.
         :return: None, Node objects are added as children to the current node.
         """
-        assert not self.is_expanded, "This node as already been expanded"
+        assert not self.is_expanded, "This node has already been expanded"
         unvisited_leaf_nodes_chg = -1  # Record how many new unexplored leaf nodes are created, this node
         # goes from being an unvisted / unexpanded node to expanded so we minus 1 to start with
         if not self.is_terminal:  # If not terminal, then there are additional child nodes we can add
             board = chess.Board(self.state)  # Init a chess board object for internal operations
             legal_moves = list(board.legal_moves)
-            uniform_prior = 1 / len(legal_moves)
+            uniform_prior = 1 / len(legal_moves) # Sums to 1 across all actions by design
             for move in legal_moves:  # Add a child node for each legal move starting here
                 board.push(move)  # Make this move on the board to get the next resulting game state
                 child = Node_MCTS(state=board.fen(), parent=self)
@@ -478,6 +482,12 @@ class Node_MCTS:
                 self.children.append(child)
                 board.pop()  # Backtrack to visit the next legal move
                 unvisited_leaf_nodes_chg += 1  # Record another unexplored child node added
+
+            # Once we've added all the prior values, normalize across them using softmax to ensure that they
+            # are all positive and sum to 1 across all actions (children)
+            normed_priors = softmax([child.prior for child in self.children])
+            for i, prior_val in enumerate(normed_priors):  # Update values after applying softmax collectively
+                self.children[i] = prior_val
 
             node = self  # Back propagate the update for unvisited_leaf_nodes to the root node
             while node is not None:
@@ -508,16 +518,16 @@ class Node_MCTS:
         val_est (or terminal reward) is added to each node, n_visited is incremented and virtual_loss is
         decremented for each node along the path from root to leaf (this node).
         """
-        if self.is_terminal:  # If the node is a terminal node, then use the definitive outcome reward
-            reward = self.terminal_reward
-        else:  # Otherwise, use the value estimate produce by the model instead
-            reward = val_est
+        if self.is_terminal:  # No estimate needed, definitive outcome from game env
+            msg = "val_est should be equal to terminal_reward for a terminal node but got: "
+            msg += f"val_est={val_est} and self.terminal_reward={self.terminal_reward}"
+            assert val_est == self.terminal_reward, msg
 
         node = self
         while node is not None:
             node.n_visits += 1
             node.virtual_loss -= 1
-            node.value_sum += reward
+            node.value_sum += val_est
             node = node.parent  # Move up to the next node along the path to the root
 
 
@@ -549,6 +559,9 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
 
     for i in range(n_iters // batch_size + 1):  # Run a batched MC process for batched model forward passes
         leaf_nodes = []  # Record leaf nodes to be passed to the model for batched evaluation
+
+        if root.unvisited_leaf_nodes == 0:  # If all nodes have been explored, stop iterating, there are
+            break  # no further unexplored leaf nodes left, all leaf nodes are terminal nodes, stop searching
 
         # 1). Select leaf nodes for expansion in batches for batched evaluation through model(state_batch)
         for k in range(batch_size):  # Make batch_size leaf node selections
@@ -586,7 +599,8 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
 
         # 3). Perform backup operations to propagate the new value estimates upwards in the tree
         for i, leaf_node in enumerate(leaf_nodes):
-            # We only ever select and expand a leaf noded 1x, assert that this is true
+            # We only ever select and expand a leaf noded 1x, assert that this is leaft hasn't already been
+            # reached and expanded before, if so then raise an assertion error
             assert not leaf_node.is_expanded, "leaf node already expanded"
 
             if leaf_node.is_terminal:  # Then the value of the game state is know for certain, no est needed

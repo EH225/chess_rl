@@ -52,4 +52,3 @@ hyper_params:
     beta_begin: 0.4 # The first value of beta used in importance sampling
     beta_end: 1.0 # The final value of beta used in importance sampling
     beta_nsteps: 3000000 # The number of steps over which the beta for importance sampling is increased
-

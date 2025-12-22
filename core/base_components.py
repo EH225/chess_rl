@@ -763,56 +763,17 @@ class DVN:
         max_moves = self.config["model_training"]["max_eval_moves"]
         all_losses = []
 
-        # Look for a eval_ep_history.csv on disk if there is one, otherwise create a new ep_df to record in
-        ep_df_file_path = os.path.join(self.config["output"]["plot_output"], "eval_ep_history.csv")
-        if os.path.exists(ep_df_file_path):  # Check if an eval_ep_history file has been cached
-            ep_df = pd.read_csv(ep_df_file_path)  # Read in the data from disk
-        else:
-            ep_df = pd.DataFrame(dtype=float, columns=self.ep_df_cols)
-
-        for col in ["outcome", "winner", "end_state"]:  # Change these columns to string format
-            ep_df[col] = ep_df[col].astype(str)
-
-
         with logging_redirect_tqdm():
             for g in tqdm(range(num_episodes), ncols=75):
                 # Compute the losses for each move for 1 self-play game
                 ep_losses, move_stack = evaluate_agent_game(self.agent_move_func, max_moves=max_moves,
                                                             return_move_stack=True)
                 all_losses.extend(ep_losses)  # Aggregate the losses over all moves and all games
+                self.update_eval_ep_history(move_stack, max_moves)  # Log the episode in the eval hist csv
                 if verbose is True:
                     msg = f"Game {g + 1}: ACPL = {sum(ep_losses) / len(ep_losses):.1f}, {len(move_stack)}"
                     msg += " moves total"
                     self.logger.info(msg)
-
-                # Re-play the match using move_stack and record values in ep_df as we go to log a summary of
-                # how the game went and what happened during it
-                env = ChessEnv(record_dir=self.config["output"]["record_path"])
-                ep_record = {col: 0 for col in self.ep_df_cols}  # Entry for addition to the ep_df
-                n_row = len(ep_df)
-                ep_record["t"] = 0  # Fill with zeros, not applicable here
-                ep_record["episode_id"] = n_row  # Number the episodes in order
-
-                state = env.reset()
-                for move in move_stack:
-                    print("move", move)
-                    print(env.action_space.actions)
-                    action = list(env.action_space.actions).index(move)
-                    new_state, reward, terminated, truncated = self.env.step(action)
-
-                    # Update the episode record which tabulates key events using (s, a, s')
-                    self.update_ep_record(ep_record, state, action, new_state)
-
-                if not terminated and len(move_stack) == max_moves: # If the last move doesn't end the game,
-                    # and the max_moves were reached in the move_stack, then record that the eval game was
-                    # truncated early by the max_moves limit
-                    ep_record["outcome"] = "TRUNCATED"
-                    ep_record["winner"] = "none"
-                    sign_flip = -1 if self.env.board.turn is False else 1
-                    ep_record["white_material_diff"] = material_diff(new_state) * sign_flip
-
-                ep_df.loc[n_row, :] = pd.Series(ep_record)  # Record as a new row in the episode record
-                ep_df.to_csv(ep_df_file_path, index=False)  # Write out a new copy of the ep_df on each update
 
         overall_acpl = sum(all_losses) / len(all_losses)
         self.logger.info(f"\nOverall ACPL: {overall_acpl:.1f}")
@@ -824,6 +785,55 @@ class DVN:
             save_move_stack(move_stack, os.path.join(output_dir, f"game-{self.env.episode_id}.txt"))
 
         return overall_acpl
+
+
+    def update_eval_ep_history(self, move_stack: List[chess.Move], max_moves: int) -> None:
+        """
+        This method is called after running an evaluation episode and logs a new entry in the evaluation
+        episode history file (eval_ep_history.csv) by replaying the match using the move_stack and recording
+        key info during the progression of the game.
+
+        :param move_stack: A stack of moves describing the evolution of the game.
+        :param max_moves: An int denoting the max number of moves allowed in each eval game.
+        :return: None, saved a new record to the cached csv file.
+        """
+        # Look for a eval_ep_history.csv on disk if there is one, otherwise create a new ep_df to record in
+        ep_df_file_path = os.path.join(self.config["output"]["plot_output"], "eval_ep_history.csv")
+        if os.path.exists(ep_df_file_path):  # Check if an eval_ep_history file has been cached
+            ep_df = pd.read_csv(ep_df_file_path)  # Read in the data from disk
+        else:
+            ep_df = pd.DataFrame(dtype=float, columns=self.ep_df_cols)
+
+        for col in ["outcome", "winner", "end_state"]:  # Change these columns to string format
+            ep_df[col] = ep_df[col].astype(str)
+
+        # Re-play the match using move_stack and record values in ep_df as we go to log a summary of
+        # how the game went and what happened during it
+        env = ChessEnv(record_dir=self.config["output"]["record_path"])
+        ep_record = {col: 0 for col in self.ep_df_cols}  # Entry for addition to the ep_df
+        n_row = len(ep_df)
+        ep_record["t"] = 0  # Fill with zeros, not applicable here
+        ep_record["episode_id"] = n_row  # Number the episodes in order
+
+        state = env.reset()  # Create a new env to replay the steps and start at the initial board set up
+        for move in move_stack:
+            action = env.action_space.actions.index(move)
+            new_state, reward, terminated, truncated = env.step(action)
+            # Update the episode record which tabulates key events using (s, a, s')
+            self.update_ep_record(ep_record, state, action, new_state)
+            state = new_state # Update for next iteration
+
+        if not terminated and len(move_stack) == max_moves: # If the last move doesn't end the game,
+            # and the max_moves were reached in the move_stack, then record that the eval game was
+            # truncated early by the max_moves limit
+            ep_record["outcome"] = "TRUNCATED"
+            ep_record["winner"] = "none"
+            sign_flip = -1 if self.env.board.turn is False else 1
+            ep_record["white_material_diff"] = material_diff(new_state) * sign_flip
+
+        ep_df.loc[n_row, :] = pd.Series(ep_record)  # Record as a new row in the episode record
+        ep_df.to_csv(ep_df_file_path, index=False)  # Write out a new copy of the ep_df on each update
+
 
     def record(self, max_moves: int = 300) -> None:
         """
