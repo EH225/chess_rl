@@ -201,9 +201,9 @@ class Progbar:
             eta = time_per_unit * (self.target - current)
             info = ""
             if current < self.target:
-                info += " - ETA: %ds" % eta
+                info += " - ETA: %dm" % (eta / 60)
             else:
-                info += " - %ds" % (now - self.start)
+                info += " - %dm" % ((now - self.start) / 60)
             for k in self.unique_values:
                 if type(self.sum_values[k]) is list:
                     info += " - %s: %.4f" % (

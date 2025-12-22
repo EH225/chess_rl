@@ -36,6 +36,7 @@ hyper_params:
     buffer_size: 1000 # The frame capacity of the replay buffer
     gamma: 1.00 # The temporal discount factor of future rewards
     learning_freq: 4 # The frequency of update to the v_network model parameters
+    learning_updates: 3 # The number of learning update batches run each at each update interval 
     learning_start: 50 # A warm-up period before any training begins
     wt_decay: 0.005 # Set an L2 regularization amount
 
@@ -52,4 +53,3 @@ hyper_params:
     beta_begin: 0.4 # The first value of beta used in importance sampling
     beta_end: 1.0 # The final value of beta used in importance sampling
     beta_nsteps: 3000000 # The number of steps over which the beta for importance sampling is increased
-

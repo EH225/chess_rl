@@ -541,28 +541,40 @@ class DVN:
                 # Track the total reward throughout the full episode
                 episode_reward += reward
 
-                # Perform a training step using the replay buffer to update the network parameters
-                loss_eval, grad_eval = self.train_step(t, replay_buffer, lr_schedule.param,
-                                                       beta_schedule.param)
-
-                if t % self.config["model_training"]["log_freq"] == 0:  # Update logging every so often
-                    if t > self.config["hyper_params"]["learning_start"]:
-                        # Wait until the warm-up period has been reached to start logging
-                        self.update_averages(episode_rewards, max_q_values, q_values, eval_scores)
-                        self.add_summary(loss_eval, grad_eval, t)
-                        if len(episode_rewards) > 0:  # If we have run at least 1 episode so far
-                            prog.update(t + 1, exact=[("Loss", loss_eval), ("Avg_R", self.avg_reward),
-                                                      ("Max_R", np.max(episode_rewards)),
-                                                      ("eps", exp_schedule.param),
-                                                      ("Grads", grad_eval), ("Max_Q", self.max_q),
-                                                      ("lr", lr_schedule.param)],
-                                        base=self.config["hyper_params"]["learning_start"])
-
-                    else:  # If t < self.config["hyper_params"]["learning_start"], within the warm-up period
+                if t <= self.config["hyper_params"]["learning_start"]: # Populate the replay buffer
+                    if t % self.config["model_training"]["log_freq"] == 0:  # Update logging every so often
                         learning_start = self.config['hyper_params']['learning_start']
                         sys.stdout.flush()
                         sys.stdout.write(f"\rPopulating the replay buffer {t}/{learning_start}...")
                         prog.reset_start()
+
+                else: # Otherwise if the warm-up period has ended, then potentially perform gradient updates,
+                    # performance logging and evaluations
+
+                    # Perform a training step using the replay buffer to update the network parameters
+                    loss_eval, grad_eval = self.train_step(t, replay_buffer, lr_schedule.param,
+                                                           beta_schedule.param)
+
+                    if t % self.config["model_training"]["log_freq"] == 0:  # Update logging every so often
+                        self.update_averages(episode_rewards, max_q_values, q_values, eval_scores)
+                        self.add_summary(loss_eval, grad_eval, t)
+                        max_R = np.max(episode_rewards) if episode_rewards else 0
+
+                        prog.update(t + 1, exact=[("Loss", loss_eval), ("Avg_R", self.avg_reward),
+                                                  ("Max_R", max_R),
+                                                  ("eps", exp_schedule.param),
+                                                  ("Grads", grad_eval), ("Max_Q", self.max_q),
+                                                  ("lr", lr_schedule.param)],
+                                    base=self.config["hyper_params"]["learning_start"])
+
+                    # If it has been more than eval_freq steps since the last time we ran an eval then run now
+                    if (t - last_eval) >= self.config["model_training"]["eval_freq"]:
+                        last_eval = t  # Record the training timestep of the last eval (now)
+                        eval_scores.append(
+                            (t, self.evaluate(num_episodes=self.config["model_training"]["num_episodes_test"],
+                                              record_last=self.config["model_training"]["record"]))
+                        )  # Compute a new eval score value for the model
+                    save_eval_scores(eval_scores, self.config["output"]["plot_output"])  # Save results
 
                 state = new_state  # Update for next iteration, move to the new FEN state representation
                 # End the episode if one of the stopping conditions is met
@@ -574,16 +586,6 @@ class DVN:
             ep_record = create_ep_record(self.env.board.move_stack)
             ep_record["t"] = t  # Add the training timestap as well to the logged info
             self.update_ep_history(ep_record, prefix="eval")  # Record game summary in the csv cache
-
-            if (t - last_eval) >= self.config["model_training"]["eval_freq"]:
-                # If it has been more than eval_freq steps since the last time we ran an eval then run again
-                if t >= self.config["hyper_params"]["learning_start"]:
-                    last_eval = t  # Record the training timestep of the last eval (now)
-                    eval_scores.append(
-                        (t, self.evaluate(num_episodes=self.config["model_training"]["num_episodes_test"],
-                                          record_last=self.config["model_training"]["record"]))
-                    )  # Compute a new eval score value for the model
-                    save_eval_scores(eval_scores, self.config["output"]["plot_output"])  # Save results
 
         # Final screen updates
         self.logger.info("Training done.")
@@ -614,7 +616,7 @@ class DVN:
 
         if t >= learning_start and t % learning_freq == 0:  # Update the q_network parameters with samples
             # from the reply buffer, which we only do every so often during game play
-            for i in learning_updates:  # Run potentially many update steps
+            for i in range(learning_updates):  # Run potentially many update steps
                 loss_eval, grad_eval = self.update_step(replay_buffer, lr, beta)
                 loss_eval_total += loss_eval
                 grad_eval_total += grad_eval
@@ -623,7 +625,7 @@ class DVN:
         if t % self.config["model_training"]["saving_freq"] == 0:
             self.save()
 
-        return loss_eval / learning_updates, grad_eval / learning_updates
+        return loss_eval_total / learning_updates, grad_eval_total / learning_updates
 
     def update_step(self, replay_buffer: ReplayBuffer, lr: float, beta: float) -> Tuple[int, int]:
         """
@@ -736,7 +738,7 @@ class DVN:
             ep_record["episode_id"] = len(ep_df)
             ep_df.loc[len(ep_df), :] = ep_record
         else:  # If not, then use this ep_record as the first entry in the ep_df
-            ep_df = ep_record.to_frame()
+            ep_df = ep_record.to_frame().T
 
         for col in ["outcome", "winner", "end_state"]:  # Change these columns to string format
             ep_df[col] = ep_df[col].astype(str)
