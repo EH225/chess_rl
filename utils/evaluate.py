@@ -12,12 +12,13 @@ import asyncio, subprocess
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    STOCKFISH_PATH = rf"{os.path.join(PARENT_DIR, 'stockfish/stockfish-windows-x86-64-avx2.exe')}"
+else:
+    STOCKFISH_PATH = rf"{os.path.join(PARENT_DIR, 'stockfish/stockfish-ubuntu-x86-64-avx2')}"
 
 import chess
 import chess.engine
 from typing import Callable
-
-STOCKFISH_PATH = rf"{os.path.join(PARENT_DIR, 'stockfish/stockfish-windows-x86-64-avx2.exe')}"
 
 
 def compute_move_loss(engine: chess.engine.SimpleEngine, board: chess.Board, move: chess.Move,
