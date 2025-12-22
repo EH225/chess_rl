@@ -1,0 +1,6 @@
+*__pycache__*
+*.docx
+results/
+*.tmp
+*github_keys/
+*scratch/
