@@ -215,10 +215,10 @@ class DVN:
             - The value estimate of this state as a float
             - The estimated Q-values for all possible actions (best action is not always the argmax)
         """
-        if state is None:  # If not state provided, then randomly sample from the action space and return a
+        if state is None:  # If no state provided, then randomly sample from the action space and return a
             # collection of 0s for the estimated values of each action
-            action = default if default is None else self.env.action_space.sample()
-            return action, torch.zeros(self.env.action_space.n)
+            action = default if default is not None else self.env.action_space.sample()
+            return action, 0.0, torch.zeros(self.env.action_space.n)
 
         with torch.no_grad():  # Gradient tracking is not needed for this online action-selection step
             # Use the search function to generate what the best action would be according to the model

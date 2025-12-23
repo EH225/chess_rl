@@ -177,7 +177,7 @@ class ChessEnv:
     self.step(), self.reset(), and self.action_space for RL agent interactions.
     """
 
-    def __init__(self, step_limit: int = 5000, record_dir: str = None, initial_state: str = None):
+    def __init__(self, step_limit: int = 400, record_dir: str = None, initial_state: str = None):
         self.step_limit = step_limit  # Record the episodic step count limit after which we truncate
         if initial_state is not None:  # If specified, start the env in the initial state passed (a FEN str)
             self.board = chess.Board(initial_state)

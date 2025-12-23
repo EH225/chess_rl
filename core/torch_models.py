@@ -146,8 +146,11 @@ class MLP(nn.Module):
         :param state_batch: A batch of FEN states as a list of strings.
         :return: A torch.Tensor of size (batch_size, ) with the value estimates for each stating position.
         """
-        # Convert the input board into the expected state representation and pass it through the network
-        return self.model(self.state_to_model_input(state_batch))
+        if len(state_batch) > 0:
+            # Convert the input board into the expected state representation and pass it through the network
+            return self.model(self.state_to_model_input(state_batch))
+        else:
+            return torch.zeros(0)
 
 
 ####################################
@@ -287,8 +290,11 @@ class CNN(nn.Module):
         :param state_batch: A batch of FEN states as a list of strings.
         :return: A torch.Tensor of size (batch_size, ) with the value estimates for each stating position.
         """
-        # Convert the input board into the expected state representation and pass it through the network
-        return self.model(self.state_to_model_input(state_batch))
+        if len(state_batch) > 0:
+            # Convert the input board into the expected state representation and pass it through the network
+            return self.model(self.state_to_model_input(state_batch))
+        else:
+            return torch.zeros(0)
 
 
 ############################################
@@ -418,12 +424,14 @@ class Transformer(nn.Module):
         :param state_batch: A batch of FEN states as a list of strings.
         :return: A torch.Tensor of size (batch_size, ) with the value estimates for each stating position.
         """
-        x = self.state_to_model_input(state_batch)  # (batch_size, ) -> (batch_size, 68, embed_size)
-        x = self.encoder(x)  # Pass x through the encoder blocks, (batch_size, 68, embed_size)
-        # Perform global average pooling across all the output attention vectors to get a final vector
-        x = x.mean(axis=1)  # (batch_size, 68, embed_size) -> (batch_size, embed_size)
-        return F.tanh(self.proj(x))  # Linear projection to 1 final output value estimate [-1, +1]
-
+        if len(state_batch) > 0:
+            x = self.state_to_model_input(state_batch)  # (batch_size, ) -> (batch_size, 68, embed_size)
+            x = self.encoder(x)  # Pass x through the encoder blocks, (batch_size, 68, embed_size)
+            # Perform global average pooling across all the output attention vectors to get a final vector
+            x = x.mean(axis=1)  # (batch_size, 68, embed_size) -> (batch_size, embed_size)
+            return F.tanh(self.proj(x))  # Linear projection to 1 final output value estimate [-1, +1]
+        else:
+            return torch.zeros(0)
 
 ####################################
 ### Chess Agent Class Definition ###
