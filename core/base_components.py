@@ -474,7 +474,7 @@ class DVN:
         # to it from there, use it to infer the t that we will continue training at
         file_path = os.path.join(self.config["output"]["plot_output"], "eval_scores.csv")
         if os.path.exists(file_path):  # Check if an eval score file has been cached to the output directory
-            eval_scores = [tuple(x) for x in np.loadtxt(file_path, delimiter=',').tolist()]  # Load cache
+            eval_scores = [tuple(row.values) for idx, row in pd.read_csv(file_path).iterrows()]  # Load cache
             t = int(eval_scores[-1][0])  # Re-instate the largest t value recorded in the cached values
             last_eval = t  # This is also the last time we made a model eval call
             exp_schedule.update(t)  # Update the epsilon obj before passing into the method below
