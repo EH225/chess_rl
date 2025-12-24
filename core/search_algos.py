@@ -398,7 +398,7 @@ class Node_MCTS:
             # If the game ends in checkmate and root_turn is next to move, then root lost
             if board.is_checkmate():
                 self.terminal_reward = -1 if self.node_turn is self.root_turn else 1
-            else: # For all other types of end games (stalemates, insufficient materials etc.)
+            else:  # For all other types of end games (stalemates, insufficient materials etc.)
                 self.terminal_reward = 0
         else:
             self.terminal_reward = None
@@ -476,7 +476,7 @@ class Node_MCTS:
         if not self.is_terminal:  # If not terminal, then there are additional child nodes we can add
             board = chess.Board(self.state)  # Init a chess board object for internal operations
             legal_moves = list(board.legal_moves)
-            uniform_prior = 1 / len(legal_moves) # Sums to 1 across all actions by design
+            uniform_prior = 1 / len(legal_moves)  # Sums to 1 across all actions by design
             for move in legal_moves:  # Add a child node for each legal move starting here
                 board.push(move)  # Make this move on the board to get the next resulting game state
                 child = Node_MCTS(state=board.fen(), parent=self)
@@ -493,6 +493,12 @@ class Node_MCTS:
             # Once we've added all the prior values, normalize across them using softmax to ensure that they
             # are all positive and sum to 1 across all actions (children)
             normed_priors = softmax([child.prior for child in self.children])
+            if self.parent is None:  # Add dirichlet noise at the parent node to the child prior values
+                rng = np.random.default_rng()
+                noise = rng.dirichlet([0.3 for i in range(len(self.children))], size=1).reshape(-1)
+                normed_priors = (1 - 0.25) * normed_priors + (0.25) * noise
+            assert np.abs(normed_priors.sum() - 1.0) < 1e-6, "normed_priors do not sum to 1.0"
+
             for i, prior_val in enumerate(normed_priors):  # Update values after applying softmax collectively
                 self.children[i].prior = prior_val
 
@@ -606,7 +612,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
 
         # 3). Perform backup operations to propagate the new value estimates upwards in the tree
         for i, leaf_node in enumerate(leaf_nodes):
-            # We only ever select and expand a leaf noded 1x, assert that this is leaft hasn't already been
+            # We only ever select and expand a leaf node 1x, assert that this is leaf hasn't already been
             # reached and expanded before, if so then raise an assertion error
             assert not leaf_node.is_expanded, "leaf node already expanded"
 
@@ -616,7 +622,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
                 # Flip sign if evaluated from opposing side, all rewards should be from the side of root
                 val_est = cache[leaf_node.state_] * (1 if leaf_node.node_turn == leaf_node.root_turn else -1)
 
-            # Add the estimated value to all nodes along the path from leaf to root and decriment virtual loss
+            # Add the estimated value to all nodes along the path from leaf to root and decrement virtual loss
             leaf_node.backup(val_est)
             leaf_node.expand_legal_moves(prior_heuristic)  # Create child nodes (if non-terminal)
 
@@ -629,11 +635,12 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
 #### TODO: DEBUG TESTING ####
 if __name__ == "__main__":
     import time
+
     state = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'  # Default starting state
     state = 'r1bqkb1r/pppp1ppp/5n2/4n3/P1B1P3/8/1PPP1PPP/RNB1K1NR b KQkq - 0 5'  # Regular board
     state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/7q/5N1P/2PPPPP1/RNBQKB1R b KQkq - 2 5'  # 1 move away from checkmate
     state = 'rnb1k1r1/pPppnppp/4p3/2b5/7q/5N1P/2PPPPP1/RNBQKB1R w KQq - 1 8'  # Pawn promotion
-    state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/8/5N1P/2PPPqP1/RNBQKB1R w KQkq - 0 6' # Checkmate
+    state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/8/5N1P/2PPPqP1/RNBQKB1R w KQkq - 0 6'  # Checkmate
     board = chess.Board(state)
     dummy_model = lambda x: torch.rand(len(x)) * 2 - 1  # TEMP sample model, fill in for a value approximator
 

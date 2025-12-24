@@ -16,6 +16,7 @@ import torch, chess
 import torch.nn as nn
 import torch.nn.functional as F
 from core.base_components import DVN
+import core.search_algos as search_algos
 from utils.general import compute_img_out_dim
 from typing import Tuple, List, Dict
 
@@ -149,8 +150,8 @@ class MLP(nn.Module):
         if len(state_batch) > 0:
             # Convert the input board into the expected state representation and pass it through the network
             return self.model(self.state_to_model_input(state_batch))
-        else:
-            return torch.zeros(0)
+        else:  # If an empty batch is passed, return an empty torch.Tensor
+            return torch.zeros(0).to(self.device)
 
 
 ####################################
@@ -293,8 +294,8 @@ class CNN(nn.Module):
         if len(state_batch) > 0:
             # Convert the input board into the expected state representation and pass it through the network
             return self.model(self.state_to_model_input(state_batch))
-        else:
-            return torch.zeros(0)
+        else:  # If an empty batch is passed, return an empty torch.Tensor
+            return torch.zeros(0).to(self.device)
 
 
 ############################################
@@ -430,8 +431,9 @@ class Transformer(nn.Module):
             # Perform global average pooling across all the output attention vectors to get a final vector
             x = x.mean(axis=1)  # (batch_size, 68, embed_size) -> (batch_size, embed_size)
             return F.tanh(self.proj(x))  # Linear projection to 1 final output value estimate [-1, +1]
-        else:
-            return torch.zeros(0)
+        else:  # If an empty batch is passed, return an empty torch.Tensor
+            return torch.zeros(0).to(self.device)
+
 
 ####################################
 ### Chess Agent Class Definition ###
@@ -443,6 +445,11 @@ class ChessAgent(DVN):
     Wrapper class around DVN that creates a deep value network model with a PyTorch based self.v_network
     attribute for computing value estimates of input states.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.model_name = self.config["model"]
+        self.model_class = self.config["model_class"]
 
     def initialize_model(self) -> None:
         """
@@ -478,3 +485,39 @@ class ChessAgent(DVN):
         :return: A torch.Tensor of size (batch_size, ) with the value estimates for each stating position.
         """
         return self.v_network(state_batch)
+
+    @staticmethod
+    def _compute_td_target_batch(state_batch: List[str], config: Dict) -> np.ndarray:
+        """
+        This method sequentially computes the estimated value of each state in state_batch using the search
+        function and model specified in the input config dictionary. A model instance is instantiated and the
+        weights are read in from disk. Each state estimate is then computed using a search function and the
+        results are collected and returned in a np.ndarray. This function is designed to be called in parallel
+        using dask.
+
+        :param state_batch: A batch of FEN states as a list of strings.
+        :param config: A config dictionary read from yaml that specifies hyperparameters.
+        :return: A np.ndarray of the same size as state_batch with state value estimates for each.
+        """
+        if isinstance(state_batch, str):  # Accept a lone string, convert it to a list of size 1
+            state_batch = [state_batch, ]  # All lines below expect state_batch to be a list
+
+        # 1). Init the right kind of v_network model according to the config passed
+        v_network = globals()[config["model_class"]](config)
+
+        # 2). Load in the weights of the model
+        load_dir = config["model_training"]["load_dir"]
+        wts_path = os.path.join(load_dir, "model.bin")
+        wts = torch.load(wts_path, map_location="cpu", weights_only=True)
+        v_network.load_state_dict(wts)
+
+        # 3). Determine the search function specified by the config
+        search_func = getattr(search_algos, config["search_func"]["name"])
+
+        # 4). Compute the TD targets sequentially using the search function
+        state_values = np.zeros(len(state_batch), dtype=np.float32)  # 1 float state estimate per state
+        for i, state in enumerate(state_batch):
+            _, state_value, _ = search_func(state=state, model=v_network, **config["search_func"])
+            state_values[i] = state_value
+
+        return state_values

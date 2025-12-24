@@ -13,6 +13,23 @@ import os, chess, cv2, io, chess.svg, cairosvg
 from PIL import Image
 
 
+def move_stack_to_states(move_stack: List[chess.Move], state: str = None) -> List[str]:
+    """
+    Takes in a sequential list of moves (move_stack) and plays them out from an initial starting board state
+    and records as a list of strings all the intermediate states reached as FEN encodings.
+
+    :param move_stack: A stack of chess.Moves that are legal.
+    :param state: A starting state from which the move stack evolves.
+    :return: A list of FEN state encodings for each state reached during play.
+    """
+    board = chess.Board() if state is None else chess.Board().state
+    states = [board.fen(), ]
+    for move in move_stack:
+        board.push(move)
+        states.append(board.fen())
+    return states
+
+
 def material_diff(state: str) -> float:
     """
     Computes the net material difference of the current board state from the perpsective of the player who is
@@ -53,7 +70,7 @@ def create_ep_record(move_stack: List[chess.Move]) -> Dict:
                   "black_checks", "white_promotions", "black_promotions", "white_en_passant",
                   "black_en_passant", "white_ks_castle", "black_ks_castle", "white_qs_castle",
                   "black_qs_castle", "end_state"]
-    ep_record = {col: 0 for col in ep_df_cols} # Record key info in a dictionary
+    ep_record = {col: 0 for col in ep_df_cols}  # Record key info in a dictionary
 
     for move in move_stack:  # Re-play the game again, apply each move
         color = "white" if board.turn is chess.WHITE else "black"  # Color of the player to move next
@@ -70,10 +87,10 @@ def create_ep_record(move_stack: List[chess.Move]) -> Dict:
         if move.promotion:  # Check if this move is a pawn promotion
             ep_record[f"{color}_promotions"] += 1
 
-        board.push(move) # Make the next move in the sequence of moves to update the state
+        board.push(move)  # Make the next move in the sequence of moves to update the state
 
     outcome = board.outcome()
-    if outcome: # Check if the game has ended after the last move was made
+    if outcome:  # Check if the game has ended after the last move was made
         ep_record["outcome"] = outcome.termination.name
         if outcome.winner is chess.WHITE:
             ep_record["winner"] = "white"
@@ -81,7 +98,7 @@ def create_ep_record(move_stack: List[chess.Move]) -> Dict:
             ep_record["winner"] = "black"
         else:
             ep_record["winner"] = "none"
-    else: # Otherwise record the outcome as Truncated if the game hasn't yet ended
+    else:  # Otherwise record the outcome as Truncated if the game hasn't yet ended
         ep_record["outcome"] = "TRUNCATED"
         ep_record["winner"] = "none"
 
@@ -177,7 +194,7 @@ class ChessEnv:
     self.step(), self.reset(), and self.action_space for RL agent interactions.
     """
 
-    def __init__(self, step_limit: int = 400, record_dir: str = None, initial_state: str = None):
+    def __init__(self, step_limit: int = 250, record_dir: str = None, initial_state: str = None):
         self.step_limit = step_limit  # Record the episodic step count limit after which we truncate
         if initial_state is not None:  # If specified, start the env in the initial state passed (a FEN str)
             self.board = chess.Board(initial_state)

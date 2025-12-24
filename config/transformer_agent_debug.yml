@@ -20,9 +20,9 @@ model: # Config parameters for the value estimation network
     ff_dim: 512 # The feed-forward neural network hidden size, usually 4x the hidden_size
 
 search_func: # This defines kwargs that will be passed to the search function from core/search_algos.py
-    name: "naive_search"
-    gamma: 1.00 # The temporal discount factor of future rewards
-    batch_size: 64 # The batch_size used for generating state value estimates
+    name: "monte_carlo_tree_search"
+    batch_size: 32 # The batch_size used for generating state value estimates
+    n_iters: 500 # The number of Monte Carlo tree search iterations to run
 
 model_training:
     record: True
