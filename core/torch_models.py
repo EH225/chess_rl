@@ -74,7 +74,7 @@ class MLP(nn.Module):
             nn.Linear(128, 1),
             nn.Tanh()
         )  # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
-        self.device = next(self.model.parameters()).device
+        self.device = next(self.model.parameters()).device.type
 
     def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -99,7 +99,7 @@ class MLP(nn.Module):
         """
         sym_to_int = {s: i for i, s in enumerate("pnbrqk")}  # Mapping from symbol e.g. "b" to index e.g. 2
         output = torch.zeros((len(state_batch), 8, 8, 6))  # 8 rows, 8 cols, 6 piece types, encode -1, 0, or 1
-        extra_info = torch.zeros((len(state_batch), 5))  # 4 castling rights + 1 repition counter
+        extra_info = torch.zeros((len(state_batch), 5))  # 4 castling rights + 1 repetition counter
         for i, state in enumerate(state_batch):
             board = chess.Board(state)  # Use the FEN string encoding to create the board
             for cell, piece in board.piece_map().items():  # Iter over the piece dictionary
@@ -149,7 +149,7 @@ class MLP(nn.Module):
         """
         if len(state_batch) > 0:
             # Convert the input board into the expected state representation and pass it through the network
-            return self.model(self.state_to_model_input(state_batch))
+            return self.model(self.state_to_model_input(state_batch)).squeeze(1)
         else:  # If an empty batch is passed, return an empty torch.Tensor
             return torch.zeros(0).to(self.device)
 
@@ -167,12 +167,14 @@ class ResBlockCNN(nn.Module):
     def __init__(self, channels: int):
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
         self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
         self.activation = nn.LeakyReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.activation(self.conv1(x))
-        h = self.conv2(h)
+        h = self.activation(self.bn1(self.conv1(x)))
+        h = self.bn2(self.conv2(h))
         return self.activation(x + h)
 
 
@@ -194,11 +196,13 @@ class CNN(nn.Module):
         self.model = nn.Sequential(
             # Conv2d Block 1
             nn.Conv2d(in_channels=17, out_channels=64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
             nn.LeakyReLU(),  # (batch_size, 64, 8, 8)
             ResBlockCNN(64),  # (batch_size, 64, 8, 8)
 
             # Conv2d Block 2
             nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
             nn.LeakyReLU(),  # (batch_size, 128, 8, 8)
             ResBlockCNN(128),  # (batch_size, 128, 8, 8)
 
@@ -211,7 +215,7 @@ class CNN(nn.Module):
             nn.Linear(128, 1),  # (batch_size, 128) -> (batch_size, 1)
             nn.Tanh()
         )  # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
-        self.device = next(self.model.parameters()).device
+        self.device = next(self.model.parameters()).device.type
 
     def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -293,7 +297,7 @@ class CNN(nn.Module):
         """
         if len(state_batch) > 0:
             # Convert the input board into the expected state representation and pass it through the network
-            return self.model(self.state_to_model_input(state_batch))
+            return self.model(self.state_to_model_input(state_batch)).squeeze(1)
         else:  # If an empty batch is passed, return an empty torch.Tensor
             return torch.zeros(0).to(self.device)
 
@@ -340,7 +344,7 @@ class Transformer(nn.Module):
         self.encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=self.num_layers,
                                              norm=nn.LayerNorm(self.hidden_size))
         self.proj = nn.Linear(self.embed_size, 1)  # Final linear projection after pooling to 1 output value
-        self.device = next(self.encoder.parameters()).device
+        self.device = next(self.encoder.parameters()).device.type
 
     def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -430,7 +434,8 @@ class Transformer(nn.Module):
             x = self.encoder(x)  # Pass x through the encoder blocks, (batch_size, 68, embed_size)
             # Perform global average pooling across all the output attention vectors to get a final vector
             x = x.mean(axis=1)  # (batch_size, 68, embed_size) -> (batch_size, embed_size)
-            return F.tanh(self.proj(x))  # Linear projection to 1 final output value estimate [-1, +1]
+            # Linear projection to 1 final output value estimate [-1, +1]
+            return F.tanh(self.proj(x)).squeeze(1)
         else:  # If an empty batch is passed, return an empty torch.Tensor
             return torch.zeros(0).to(self.device)
 
@@ -472,8 +477,9 @@ class ChessAgent(DVN):
         self.v_network = model_class(self.config)  # Init the value network using the config file
 
         # Init the optimizer for training, add L2 regularization through the weight_decay parameter
-        self.optimizer = torch.optim.Adam(self.v_network.parameters(),
-                                          weight_decay=self.config["hyper_params"]["wt_decay"])
+        self.optimizer = torch.optim.AdamW(self.v_network.parameters(),
+                                           lr=self.config["hyper_params"]["lr_begin"],
+                                           weight_decay=self.config["hyper_params"]["wt_decay"])
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """

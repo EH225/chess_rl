@@ -14,19 +14,19 @@ import time, chess
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-import dask
 from dask.distributed import Client
 from itertools import batched
 from tqdm.contrib.logging import logging_redirect_tqdm
 from typing import Callable, List, Tuple, Union, Dict
 
 import torch
+import torch.nn as nn
+
 from torch.utils.tensorboard import SummaryWriter
 from collections import deque
 from utils.general import get_logger, Progbar
 from utils.replay_buffer import ReplayBuffer
-from utils.chess_env import ChessEnv, save_recording, save_move_stack, material_diff, create_ep_record, \
-    move_stack_to_states
+from utils.chess_env import ChessEnv, save_recording, save_move_stack, create_ep_record, move_stack_to_states
 from utils.general import save_eval_scores
 from utils.evaluate import evaluate_agent_game
 import core.search_algos as search_algos
@@ -178,13 +178,11 @@ class DVN:
         else:  # Otherwise if we're not using pre-trained weights, then initialize them randomly
             self.logger.info("Initializing parameters randomly")
 
-            def init_weights_randomly(m):
-                if hasattr(m, "weight"):
-                    torch.nn.init.xavier_uniform_(m.weight, gain=2 ** (1.0 / 2))
-                if hasattr(m, "bias"):
-                    torch.nn.init.zeros_(m.bias)
+            def init_random_weights(m):
+                if isinstance(m, (nn.Linear, nn.Conv2d)):
+                    nn.init.kaiming_uniform_(m.weight, a=0.01, mode='fan_in', nonlinearity='leaky_relu')
 
-            self.v_network.apply(init_weights_randomly)
+            self.v_network.apply(init_random_weights)
 
         # 3). Now that we have the model and weights initialized, move them to the appropriate device
         self.v_network = self.v_network.to(self.device)
@@ -381,7 +379,6 @@ class DVN:
         results are collected and returned in a np.ndarray. This function is designed to be called in parallel
         using dask.
 
-        :param state_batch: A batch of FEN states as a list of strings.
         :param config: A config dictionary read from yaml that specifies hyperparameters.
         :return: A np.ndarray of the same size as state_batch with state value estimates for each.
         """
@@ -420,7 +417,7 @@ class DVN:
         msg = "v_search_est expected to be 1 dimensional, got {v_search_est.shape}"
         assert len(v_search_est.shape) == 1, msg
         td_errors = (v_est - v_search_est).abs()  # Compute the absolute value TD errors
-        loss = (wts * td_errors.pow(2)).mean()  # Compute the weighted MSE loss function for all batch obs
+        loss = (wts * td_errors.pow(2)).sum()  # Compute the weighted MSE loss function for all batch obs
         # After computing the loss, we should detach the td_errors from the gradient tracking computational
         # graph so that when we make updates to the replay buffer, gradients aren't being tracked there
         return loss, td_errors.detach().cpu().numpy()  # (torch.float, np.ndarray of size (batch_size, ))
@@ -724,7 +721,8 @@ class DVN:
         # 4). Run a forward pass of the batch of states through the v_network and generate value estimates
         # i.e. what the v_network estimates is the discounted future return of following an optimal policy
         # from each state as the initial starting state
-        v_est = self.v_network(state_batch).reshape(-1)  # Returns a torch.Tensor on self.device
+        with torch.autocast(device_type=self.device, dtype=torch.bfloat16):  # Use BFloat16
+            v_est = self.v_network(state_batch).reshape(-1)  # Returns a torch.Tensor on self.device
 
         # 5). Compute the TD target values using a search function to get more accurate values by looking
         # ahead, we want to train the network to estimate this search function in the forward pass
@@ -741,7 +739,13 @@ class DVN:
         wts = torch.from_numpy(wts).to(self.device)
         v_search_estimates = torch.from_numpy(v_search_estimates).to(self.device)
 
+        print("v_est", v_est)
+        print("v_search_estimates", v_search_estimates)
+        print("wts", wts)
+        # print("regular MSE", ((v_est - v_search_estimates)**2).mean())
         loss, td_errors = self.calc_loss(v_est, v_search_estimates, wts)  # td_errors is a np.array
+        # print("td_errors", td_errors)
+        print("loss", loss)
         replay_buffer.update_priorities(indices, td_errors)  # Update the priorities for the obs sampled
         loss.backward()  # Compute gradients wrt to the trainable parameters of self.v_network
 
@@ -771,7 +775,7 @@ class DVN:
         :param verbose: Indicates whether the results of the evaluation run should be reported via logging.
         :return: The average per episode socre over num_episodes.
         """
-        self.logger.info(f"\nRunning Evaluation for {num_episodes} episodes")
+        self.logger.info(f"\nRunning Evaluation for {num_episodes} episode(s)")
         max_moves = self.config["model_training"]["max_eval_moves"]
         all_losses = []
         states = []  # If return_states is True, then also record the states generated during play

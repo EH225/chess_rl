@@ -19,11 +19,13 @@ import sys, os
 CURRENT_DIR = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, CURRENT_DIR)
 
-import argparse, shutil
+import argparse, shutil, torch
 from utils.general import read_yaml
 from utils.chess_env import ChessEnv
 from core.base_components import LinearSchedule
 from core.torch_models import ChessAgent
+
+torch.set_float32_matmul_precision("high")  # Enables bf16 GEMMs on GPUs that support it
 
 def run_model_training(config_name: str) -> None:
     """

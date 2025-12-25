@@ -138,7 +138,8 @@ def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **
     # Compute the bootstrap value estimates in batches for the next possible states after each action
     value_estimates = []
     for state_batch in state_batches:  # Compute the value estimates in batches to minimize runtime
-        with torch.no_grad():  # Disable grad-tracking, not needed since no gradient step being taken
+        # Disable grad-tracking, not needed since no gradient step being taken, use bfloat16 dtypes
+        with torch.no_grad(), torch.autocast(device_type=model.device, dtype=torch.bfloat16):
             v_est = model(state_batch).cpu().reshape(-1).tolist()
         value_estimates.extend(v_est)  # Aggregate the state value estimates into 1 linear list
 
@@ -277,7 +278,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
         # placeholder since an integer is expected to be returned
         return 9999, root.reward, np.zeros(0)
     elif horizon == 0:  # If the horizon is zero, then use the model to evaluate and return that value
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(device_type=model.device, dtype=torch.bfloat16):
             vale_est = model([state]).cpu().reshape(-1).tolist()[0]
         return 9999, vale_est, np.zeros(0)
 
@@ -345,7 +346,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
             # If the eval_batch has reached batch_size or if the node_stack for further exploration is
             # depleted, then evaluate the nodes contained in eval_batch and update the tree accordingly
             state_batch = [node.state for node in eval_batch]  # Extract a list of FEN state encodings (str)
-            with torch.no_grad():  # Compute the state estimates according to the model
+            with torch.no_grad(), torch.autocast(device_type=model.device, dtype=torch.bfloat16):
                 value_batch = model(state_batch).cpu().reshape(-1).tolist()
 
             for node, value in zip(eval_batch, value_batch):  # Update the tree with these value estimates
@@ -605,7 +606,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
                 cache[leaf_node.state_] = None  # Add a placeholder in the cache, this will prevent us from
                 # running duplicative states through the model for leaf nodes within the current leaf batch
 
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(device_type=model.device, dtype=torch.bfloat16):
             value_batch = model(state_batch).cpu().reshape(-1).tolist()  # Run in parallel on the GPU
         for idx, val_est in zip(leaf_node_idx, value_batch):  # Update the cache with the new model outputs
             cache[leaf_nodes[idx].state_] = val_est

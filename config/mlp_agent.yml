@@ -14,14 +14,14 @@ output:
 search_func: # This defines kwargs that will be passed to the search function from core/search_algos.py
     name: "monte_carlo_tree_search"
     batch_size: 32 # The batch_size used for generating state value estimates
-    n_iters: 350 # The number of Monte Carlo tree search iterations to run
+    n_iters: 400 # The number of Monte Carlo tree search iterations to run
 
 model_training:
     record: True # Record the last eval episode in each eval run
     seed: 2025 # Set a random seed for usage in the replay buffer
     load_dir: !join_path [*output_path, "saved_weights/"] # Location to look for pre-trained saved weights
     num_episodes_test: 1 # The number of episodes to run for each periodic evaluation step
-    clip_val: 1.0 # The norm of the gradient vector used in grad clipping
+    clip_val: 5.0 # The norm of the gradient vector used in grad clipping
     saving_freq: 5000 # The frequency of saving model weights measured in training timesteps
     log_freq: 10 # The frequency of log updates during training measured in training timesteps
     eval_freq: 5000 # The frequency of evaluation runs measured in training timesteps
@@ -39,8 +39,8 @@ hyper_params:
     learning_start: 2500 # A warm-up period before any training begins
     wt_decay: 0.00005 # Set an L2 regularization amount
 
-    lr_begin: 0.00025 # The first value of the learning rate
-    lr_end: 0.000025 # The final value of the learning rate
+    lr_begin: 0.0001 # The first value of the learning rate
+    lr_end: 0.00001 # The final value of the learning rate
     lr_nsteps: 750000 # The number of steps over which the learning rate is decayed
     
     eps_begin: 1.0 # The first value of the epsilon exploration probability
