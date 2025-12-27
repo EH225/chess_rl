@@ -108,6 +108,18 @@ class ReplayBuffer:
         self.buffer_full = (self.num_in_buffer == self.size)  # Track if the buffer has been fully filled
         return self.last_idx  # Return the index in the replay buffer where this frame was stored
 
+    def add_entries(self, state_batch: List[str]) -> None:
+        """
+        Adds a list of input states to the replay buffer i.e. this method is equlivalent to calling add_entry
+        for each state in the input state_batch.
+
+        :param state_batch: An input list of FEN string value encoding the current state of the chess game.
+        :return: None.
+        """
+        assert isinstance(state_batch, list), "state_batch must be a list"
+        for state in state_batch:
+            self.add_entry(state)
+
     def sample(self, batch_size: int, beta: float = 0.1) -> List[torch.Tensor]:
         """
         This method randomly samples batch_size starting state observations from the replay bugger.
@@ -130,8 +142,8 @@ class ReplayBuffer:
             probs /= probs.sum()  # Normalized to be a probability vector
             # indices = self.rng.multinomial(batch_size, probs)  # Samples with replacement but that's okay
             indices = self.rng.choice(len(probs), size=batch_size, replace=False, p=probs)
-            wts = (1 / (probs[indices] * batch_size)) ** beta  # Extract the relevant weights
-            wts /= wts.max()  # Normalize by the sum of weights to prevent extreme gradients
+            wts = (1 / (probs[indices] * self.num_in_buffer)) ** beta  # Extract the relevant weights
+            wts /= wts.max()  # Normalize by the max of weights to prevent extreme gradients
         else:  # Otherwise, use naive sampling where all indices have an equal change of being selected
             indices = self.rng.choice(np.arange(0, self.num_in_buffer), size=batch_size, replace=False)
             wts = np.ones(batch_size)  # Set weights equal for all samples with weights of 1

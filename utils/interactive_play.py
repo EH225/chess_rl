@@ -30,8 +30,7 @@ def interactive_match(config_name: str, player_color: str = "white", state: str 
     player_color = chess.WHITE if player_color == "white" else chess.BLACK
 
     config = read_yaml(os.path.join(PARENT_DIR, f"config/{config_name}.yml"))
-    env = ChessEnv(record_dir=config["output"]["record_path"])
-    model = ChessAgent(env, config)
+    model = ChessAgent(config)
     board = chess.Board(state) if state is not None else chess.Board()
     check = board.king(board.turn) if board.is_check() else None
     display(chess.svg.board(board, orientation=player_color, check=check))
@@ -71,4 +70,4 @@ def interactive_match(config_name: str, player_color: str = "white", state: str 
 
 
 if __name__ == "__main__":
-    interactive_match("cnn_agent", "white")
+    interactive_match("mlp_agent", "white")

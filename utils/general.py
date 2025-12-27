@@ -48,31 +48,6 @@ def read_yaml(file_path: str) -> dict:
     return yaml.load(open(file_path), Loader=yaml.FullLoader)
 
 
-def save_eval_scores(eval_scores: List[Tuple[float]], save_dir: str) -> None:
-    """
-    Generates a time-series plot of the passed input eval_scores and saves the plot along with the data
-    itself to CSV. eval_scores is expected to be a list of tuples (t, eval_score) reporting the eval scores
-    of the model over various training iteration timestamps.
-
-    :param eval_scores: An input list of evaluation score tuples from model training.
-    :param save_dir: A directory in which to save the evaluation scores plot and data as a CSV.
-    :return: None.
-    """
-    # Convert from a list of tuples into a (N, 2) pd.DataFrame
-    eval_scores = pd.DataFrame(eval_scores, columns=["t", "eval_score"])
-    plt.figure(figsize=(8, 4))
-    plt.plot(eval_scores["t"], eval_scores["eval_score"], zorder=3)
-    plt.xlabel("Training Timestep")
-    plt.ylabel("Eval Score")
-    plt.title("Evaluation Scores During Training")
-    plt.grid(color="lightgray", zorder=-3)
-    plt.savefig(os.path.join(save_dir, "eval_scores.png"))
-    plt.close()
-
-    # Write evaluation scores to a csv file
-    eval_scores.to_csv(os.path.join(save_dir, "eval_scores.csv"), index=False)
-
-
 def get_logger(log_filename: str) -> logging.Logger:
     """
     Returns a logging.Logger instance that will write log outputs to a filepath specified.
@@ -89,153 +64,53 @@ def get_logger(log_filename: str) -> logging.Logger:
     logging.getLogger("PIL.PngImagePlugin").setLevel(logging.INFO)
     return logger
 
-
-################################
-### Progbar Class Definition ###
-################################
-# TODO: Section marker
-
-class Progbar:
+def runtime(start_time: float) -> str:
     """
-    Progbar class copied from keras (https://github.com/fchollet/keras/).
+    Given an input start_time = time.perf_counter(), this function returns the total runtime in string
+    format e.g. 2.3s using the current time of when this function is called.
 
-    Displays a progress bar during training.
+    :param start_time: The start time as a float for when the interval began.
+    :return: A string denoting the runtime of the time interval in seconds e.g. 2.3s ending the interval now.
+    """
+    return f"{time.perf_counter() - start_time:.1f}s"
+
+
+class LinearSchedule:
+    """
+    Sets a linear schedule for the linear evolution of a given parameter over time e.g. learning rate,
+    epsilon exploration rate, sampling beta.
     """
 
-    def __init__(self, target: int, width: int = 30, verbose: int = 1, discount: float = 0.9):
+    def __init__(self, param_begin: float, param_end: float, nsteps: int):
         """
-        Initialize the progress bar training tracker.
+        Initializes a LinearSchedule object instance with an update() method that will update a parameter
+        (e.g. a learning rate or epsilon exploration rate) being tracked at self.param.
 
-        :param target: The total number of steps expected.
-        :param width: The width of the progress bar displayed.
-        :param verbose:  Controls the amount of reporting done by the progbar.
-        :param discount:  Used to create an exponential moving average of recent values.
+        :param param_begin: The exploration parameter epsilon's starting value.
+        :param param_end: The exploration parameter epsilon's ending value.
+        :param nsteps: The number of steps over which the exploration parameter epsilon will decay from
+            eps_begin to eps_end linearly.
+        :returns: None
         """
-        self.width = width  # Width of the progress bar
-        self.target = target  # Number of total steps expected
-        self.sum_values = {}
-        self.exp_avg = {}
-        self.unique_values = []
-        self.start = time.time()
-        self.total_width = 0
-        self.seen_so_far = 0
-        self.verbose = verbose
-        self.discount = discount
+        self.param = param_begin  # epsilon beings at eps_begin
+        self.param_begin = param_begin
+        self.param_end = param_end
+        self.nsteps = nsteps
+        # Using a linear decay schedule, the amount of decay for each timestep will be equal each time so
+        # we can pre-compute the size of each decay step and store that here
+        self.update_per_step = ((self.param_end - self.param_begin) / self.nsteps)
 
-    def reset_start(self):
-        self.start = time.time()
-
-    def update(self, current: int, values: list = None, exact: list = None, strict: list = None,
-               exp_avg: list = None, base: int = 0) -> None:
+    def update(self, t: int) -> float:
         """
-        This method updates the progress bar.
+        Updates param internally at self.param using a linear interpolation from self.param _begin to
+        self.param_end as t goes from 0 to self.nsteps. For t > self.nsteps self.param remains constant as
+        the last updated self.param value, which is self.param_end.
 
-        :param current: The index of the current timestep.
-        :param values: A list of tuples (name, value_for_last_step). The progress bar will display averages
-            for these values.
-        :param exact: A list of tuples (name, value_for_last_step). The progress bar will display these
-            values directly.
-        :param strict: A list of tuples (name, value_for_last_step)
-        :param exp_avg: A list of tuples (name, value_for_last_step) used to update the EWAs.
-        :param base: The starting number of iterations i.e. what current was at the beginning.
-        :return: None.
+        :param t: The time index i.e. frame number of the current step.
+        :return: The updated exploration parameter value.
         """
-        values = values if values is not None else []
-        exact = exact if exact is not None else []
-        strict = strict if strict is not None else []
-        exp_avg = exp_avg if exp_avg is not None else []
-
-        for k, v in values:
-            if k not in self.sum_values:
-                self.sum_values[k] = [(v * (current - self.seen_so_far), current - self.seen_so_far), ]
-                self.unique_values.append(k)
-            else:
-                self.sum_values[k][0] += v * (current - self.seen_so_far)
-                self.sum_values[k][1] += current - self.seen_so_far
-
-        for k, v in exact:
-            if k not in self.sum_values:
-                self.unique_values.append(k)
-            self.sum_values[k] = [v, 1]
-
-        for k, v in strict:
-            if k not in self.sum_values:
-                self.unique_values.append(k)
-            self.sum_values[k] = v
-
-        for k, v in exp_avg:
-            if k not in self.exp_avg:
-                self.exp_avg[k] = v
-            else:
-                self.exp_avg[k] *= self.discount
-                self.exp_avg[k] += (1 - self.discount) * v
-
-        self.seen_so_far = current
-
-        now = time.time()
-        if self.verbose == 1:
-            prev_total_width = self.total_width
-            sys.stdout.write("\b" * prev_total_width)
-            sys.stdout.write("\r")
-
-            numdigits = int(np.floor(np.log10(self.target))) + 1
-            barstr = "%%%dd/%%%dd [" % (numdigits, numdigits)
-            bar = barstr % (current, self.target)
-            prog = float(current) / self.target
-            prog_width = int(self.width * prog)
-            if prog_width > 0:
-                bar += "=" * (prog_width - 1)
-                if current < self.target:
-                    bar += ">"
-                else:
-                    bar += "="
-            bar += "." * (self.width - prog_width)
-            bar += "]"
-            sys.stdout.write(bar)
-            self.total_width = len(bar)
-
-            if current:
-                time_per_unit = (now - self.start) / (current - base)
-            else:
-                time_per_unit = 0
-            eta = time_per_unit * (self.target - current)
-            info = ""
-            if current < self.target:
-                info += " - ETA: %dm" % (eta / 60)
-            else:
-                info += " - %dm" % ((now - self.start) / 60)
-            for k in self.unique_values:
-                if type(self.sum_values[k]) is list:
-                    info += " - %s: %.4f" % (
-                        k,
-                        self.sum_values[k][0] / max(1, self.sum_values[k][1]),
-                    )
-                else:
-                    info += " - %s: %s" % (k, self.sum_values[k])
-
-            for k, v in self.exp_avg.items():
-                info += " - %s: %.4f" % (k, v)
-
-            self.total_width += len(info)
-            if prev_total_width > self.total_width:
-                info += (prev_total_width - self.total_width) * " "
-
-            sys.stdout.write(info)
-            sys.stdout.flush()
-
-            if current >= self.target:
-                sys.stdout.write("\n")
-
-        if self.verbose == 2:
-            if current >= self.target:
-                info = "%ds" % (now - self.start)
-                for k in self.unique_values:
-                    info += " - %s: %.4f" % (
-                        k,
-                        self.sum_values[k][0] / max(1, self.sum_values[k][1]),
-                    )
-                sys.stdout.write(info + "\n")
-
-    def add(self, n, values: list = None) -> None:
-        values = values if values is not None else []
-        self.update(self.seen_so_far + n, values)
+        if t < self.nsteps:  # Prior to the end of the decay schedule, compute the linear decay +1 step
+            self.param = self.param_begin + self.update_per_step * t
+        else:  # After nsteps, set param to param_end
+            self.param = self.param_end
+        return self.param

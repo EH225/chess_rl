@@ -17,8 +17,73 @@ import torch.nn as nn
 import torch.nn.functional as F
 from core.base_components import DVN
 import core.search_algos as search_algos
-from utils.general import compute_img_out_dim
+from utils.chess_env import ChessEnv, create_ep_record
 from typing import Tuple, List, Dict
+
+##################################################
+### Pre-Training Material Heuristic Definition ###
+##################################################
+# TODO: Section marker
+
+
+class MaterialHeuristic(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.device = "cpu"  # Alwys run on the CPU
+
+    @staticmethod
+    def relative_material_diff(state: str) -> float:
+        """
+        Computes the net relative material difference of the current board state from the perpsective of the
+        player who is to move next where each piece is worth:
+            pawn (0.125), knight (3), bishop (3), rook (5), queen (9), king (0)
+
+        The relative material difference is defined as:
+            (player material) - (opponent material)
+
+        This net material difference is then normalized by min(total_material / 2, 10) where we cap the
+        denominator scaling by 10 so that being up a queen or 2 rooks is almost certainly going to win the
+        game. If the current player is in check, then subtract 0.1 from the score for them, being in check is
+        a vulnerable position and restricts the moves of the player moving next, therefore it should decrease
+        the overall expected reward for the perspective of the player to move next. Final values are clipped
+        at [-1, +1] after this check penality is added.
+
+        :param state: A FEN string denoting the current game state.
+        :return: A float value estimate of the game outcome based on relative material.
+        """
+        board = chess.Board(state)  # Convert to a chess.Board object to access the piece map
+        if board.is_game_over(): # If the game is in an end state, return the terminal reward
+            return -1.0 if board.is_checkmate() else 0.0
+
+        piece_values = {"p": 0.125, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
+        total_material, player_material = 0, 0
+        for p in board.piece_map().values():
+            piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece
+            if board.turn is True and p.symbol().isupper():  # For white, upper-case pieces are friendly
+                player_material += piece_val
+            elif board.turn is False and p.symbol().islower():  # For black, lower-case pieces are friendly
+                player_material += piece_val
+            total_material += piece_val
+
+        net_material = player_material - (total_material - player_material)
+        denom = min(total_material / 2, 10)  # Scaling context for the net_material diff, set it to be half
+        # the total material on the board or at most 20 i.e. being up a queen is 90% going to result in you
+        # winning the game
+        return np.clip(net_material / denom + (-0.2 if board.is_check() else 0), -1, 1)
+
+    def forward(self, state_batch: List[str]) -> torch.Tensor:
+        """
+        Forward pass through the model which generates a value estimate of the current board position for
+        each state observation in the input state_batch i.e. an estimate of the expected reward from the
+        current state position.
+
+        :param state_batch: A batch of FEN states as a list of strings.
+        :return: A torch.Tensor of size (batch_size, ) with the value estimates for each stating position.
+        """
+        if len(state_batch) > 0:
+            return torch.Tensor([self.relative_material_diff(state) for state in state_batch])
+        else:  # If an empty batch is passed, return an empty torch.Tensor
+            return torch.zeros(0).to(self.device)
 
 
 ####################################
@@ -492,8 +557,11 @@ class ChessAgent(DVN):
         """
         return self.v_network(state_batch)
 
+    def __call__(self, state_batch: List[str]) -> torch.Tensor:
+        return self.forward(state_batch)
+
     @staticmethod
-    def _compute_td_target_batch(state_batch: List[str], config: Dict) -> np.ndarray:
+    def _compute_td_targets(state_batch: List[str], config: Dict, t: int) -> np.ndarray:
         """
         This method sequentially computes the estimated value of each state in state_batch using the search
         function and model specified in the input config dictionary. A model instance is instantiated and the
@@ -503,11 +571,53 @@ class ChessAgent(DVN):
 
         :param state_batch: A batch of FEN states as a list of strings.
         :param config: A config dictionary read from yaml that specifies hyperparameters.
+        :param t: The current training time step. This is used to control which search function and value
+            estimator is used when generating the TD target values.
         :return: A np.ndarray of the same size as state_batch with state value estimates for each.
         """
         if isinstance(state_batch, str):  # Accept a lone string, convert it to a list of size 1
             state_batch = [state_batch, ]  # All lines below expect state_batch to be a list
 
+        # 1). Init the right kind of v_network model according to the config passed
+        if t < config["pre_train"]["nsteps_pretrain"]:
+            v_network = MaterialHeuristic()  # Use the material heuristic value estimator during pre-training
+        else:
+            v_network = globals()[config["model_class"]](config)
+
+        # 2). Load in the weights of the model
+        if t >= config["pre_train"]["nsteps_pretrain"]:
+            load_dir = config["model_training"]["load_dir"]
+            wts_path = os.path.join(load_dir, "model.bin")
+            wts = torch.load(wts_path, map_location="cpu", weights_only=True)
+            v_network.load_state_dict(wts)
+
+        # 3). Determine the search function specified by the config
+        if t < config["pre_train"]["nsteps_pretrain"]:
+            search_func = getattr(search_algos, config["pre_train"]["name"])
+            search_func_kwargs = config["pre_train"]
+        else:
+            search_func = getattr(search_algos, config["search_func"]["name"])
+            search_func_kwargs = config["search_func"]
+
+        # 4). Compute the TD targets sequentially using the search function
+        state_values = np.zeros(len(state_batch), dtype=np.float32)  # 1 float state estimate per state
+        for i, state in enumerate(state_batch):
+            _, state_value, _ = search_func(state=state, model=v_network, **search_func_kwargs)
+            state_values[i] = state_value
+
+        return state_values
+
+    @staticmethod
+    def _run_game(epsilon: float, config: Dict, *args, **kwargs) -> Tuple[List[str], Dict]:
+        """
+        Runs 1 on-policy self-play chess match with an epsilon greedy action selection strategy. This function
+        is designed to be called in parallel using dask to simulate many games simultaneously to generate
+        state observations for the replay buffer during training.
+
+        :param epsilon: The exploration parameter i.e. with probability e the agent selects a random action.
+        :param config: A config dictionary read from yaml that specifies hyperparameters.
+        :return: A list of game states (a list of FEN strings) and an ep_record summarizing the game.
+        """
         # 1). Init the right kind of v_network model according to the config passed
         v_network = globals()[config["model_class"]](config)
 
@@ -517,13 +627,32 @@ class ChessAgent(DVN):
         wts = torch.load(wts_path, map_location="cpu", weights_only=True)
         v_network.load_state_dict(wts)
 
-        # 3). Determine the search function specified by the config
+        # 3). Create a chess env and prepare recording variables
+        env = ChessEnv()
+        state = env.reset()
+        states = [state]  # Record all the states reached during game play
+
+        # 4). Determine the search function specified by the config
         search_func = getattr(search_algos, config["search_func"]["name"])
 
-        # 4). Compute the TD targets sequentially using the search function
-        state_values = np.zeros(len(state_batch), dtype=np.float32)  # 1 float state estimate per state
-        for i, state in enumerate(state_batch):
-            _, state_value, _ = search_func(state=state, model=v_network, **config["search_func"])
-            state_values[i] = state_value
+        # 5). Run a self-play game until truncation or termination
+        while True: # Run until the episode has finished
+            if np.random.rand() < epsilon:  # With probability epsilon, choose a random action
+                action, state_value, action_values = env.action_space.sample(), 0, np.zeros(0)
+            else:  # Otherwise actually use the model to evaluate
+                action, state_value, action_values = search_func(state=state, model=v_network,
+                                                                 **config["search_func"])
 
-        return state_values
+            # Perform the selected action in the env, get the new state, reward, and stopping flags
+            new_state, reward, terminated, truncated = env.step(action)
+
+            states.append(new_state)
+            state = new_state  # Update for next iteration, move to the new FEN state representation
+            # End the episode if one of the stopping conditions is met
+            if terminated or truncated:
+                break
+
+        # 5). Create a new episode record from the move stack of the game
+        ep_record = create_ep_record(env.board.move_stack)
+
+        return states, ep_record

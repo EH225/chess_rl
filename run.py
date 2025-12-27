@@ -34,7 +34,7 @@ def run_model_training(config_name: str) -> None:
     :param config_name: The name of the config to use for model training.
     :return: None, results are saved to disk.
     """
-    # Read in the config file specified by the user to be used for model training
+    # 1). Read in the config file specified by the user to be used for model training
     config = read_yaml(os.path.join(CURRENT_DIR, f"config/{config_name}.yml"))
 
     for path_name, path in config["output"].items():  # Prepend the parent dir of this project to rel paths
@@ -45,32 +45,14 @@ def run_model_training(config_name: str) -> None:
         if config["output"]["clear_all"] is True:  # Clear the existing contents if specified in the config
             shutil.rmtree(config["output"]["output_path"])  # Remove entire results directory
 
-    # Create the output directory for the results of this model if it doesn't already exist
+    # 2). Create the output directory for the results of this model if it doesn't already exist
     os.makedirs(config["output"]["output_path"], exist_ok=True)
 
-    # 1). Configure the ChessEnv simulation environment
-    env = ChessEnv(record_dir=config["output"]["record_path"])
+    # 3). Instantiate the model to be trained by providing the env and config
+    model = ChessAgent(config)
 
-    # 2). Configure the exploration strategy with epsilon decay
-    exp_schedule = LinearSchedule(float(config["hyper_params"]["eps_begin"]),
-                                  float(config["hyper_params"]["eps_end"]),
-                                  int(config["hyper_params"]["eps_nsteps"]))
-
-    # 3) Configure the learning rate decay schedule
-    lr_schedule = LinearSchedule(float(config["hyper_params"]["lr_begin"]),
-                                 float(config["hyper_params"]["lr_end"]),
-                                 int(config["hyper_params"]["lr_nsteps"]))
-
-    # 4). Configure the beta importance sampling bias correction increase schedule
-    beta_schedule = LinearSchedule(float(config["hyper_params"]["beta_begin"]),
-                                   float(config["hyper_params"]["beta_end"]),
-                                   int(config["hyper_params"]["beta_nsteps"]))
-
-    # 4). Instantiate the model to be trained by providing the env and config
-    model = ChessAgent(env, config)
-
-    # 5). Train the model after configuring the env and schedulers (lr, epsilon, beta)
-    model.train(exp_schedule, lr_schedule, beta_schedule)
+    # 4). Train the model or resume training from where it was last stopped
+    model.train()
 
 
 if __name__ == "__main__":
