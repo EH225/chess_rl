@@ -13,7 +13,7 @@ import time, chess
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from dask.distributed import Client
+from dask.distributed import Client, LocalCluster
 from itertools import batched
 from tqdm.contrib.logging import logging_redirect_tqdm
 from typing import Callable, List, Tuple, Union, Dict, Optional
@@ -22,11 +22,23 @@ import torch
 import torch.nn as nn
 
 from torch.utils.tensorboard import SummaryWriter
-from utils.general import get_logger, runtime, LinearSchedule
+from utils.general import get_logger, runtime, LinearSchedule, get_lan_ip
 from utils.replay_buffer import ReplayBuffer
 from utils.chess_env import ChessEnv, save_recording, save_move_stack, create_ep_record, move_stack_to_states
 from utils.evaluate import evaluate_agent_game
 import core.search_algos as search_algos
+
+
+def setup_path(dask_worker):
+    """
+    This function is used to make sure all dask workers have the correct python path configured.
+    """
+    import sys, os
+    CURRENT_DIR = os.path.dirname(os.path.realpath(__file__))
+    PARENT_DIR = os.path.dirname(CURRENT_DIR)
+    if PARENT_DIR not in sys.path:
+        sys.path.insert(0, PARENT_DIR)
+
 
 #####################################
 ### Deep Value-Network Definition ###
@@ -390,7 +402,13 @@ class DVN:
         global_start_time = time.time()
         self.logger.info(f"Training model: {self.config['model']}")
         self.logger.info(f"Running model training on device: {self.device}")
-        self.dask_client = Client(threads_per_worker=1)  # Use dask to compute TD targets in parallel
+
+        local_cluster = LocalCluster(ip=get_lan_ip(), threads_per_worker=1, scheduler_port=8786)
+        self.dask_client = Client(local_cluster) # Create a scheduler and connect it with the local cluster
+        self.dask_client.register_worker_callbacks(setup_path)  # Configure sys.path of all workers
+        # For any other computer on the network, activate the chess_rl venv and then run to add resources:
+        #    dask-worker tcp://192.168.12.227:8786 --nthreads 11 --nworkers 16
+        self.logger.info(f"Dask client scheduler address: {self.dask_client.scheduler.address}")
 
         # 0). Check that the v_network and optimizer are initialized
         for x in ["v_network", "optimizer"]:
@@ -542,11 +560,12 @@ class DVN:
         with torch.autocast(device_type=self.device, dtype=torch.bfloat16):  # Use BFloat16
             v_est = self.v_network(state_batch).reshape(-1)  # Returns a torch.Tensor on self.device
         self.logger.info(f"\t   {len(v_est)} y-hat state value estimates generated ({runtime(start_time)})")
-        v_est_np = v_est.detach().cpu().numpy() # Convert over to numpy for reporting summary statistics
+        v_est_np = v_est.detach().to(torch.float32).cpu().numpy() # Convert over to numpy for reporting
         summary_stats = [f"{x:.2f}" for x in [v_est_np.max(), v_est_np.min(), v_est_np.mean(),
-                                              np.abs(v_est_np.mean()), v_est_np.std()]]
+                                              np.abs(v_est_np).mean(), v_est_np.std()]]
         summary_stats = "(max, min, mean, |mean|, std) = (" + ", ".join(summary_stats) + ")"
         self.logger.info(f"\t   v_est: {summary_stats}")
+        v_est_np_model = v_est_np  # Save the alias
 
         # 5). Compute the TD target values using a search function to get more accurate values by looking
         # ahead, we want to train the network to estimate this search function in the forward pass
@@ -556,9 +575,10 @@ class DVN:
         self.logger.info(msg)
         v_est_np = v_search_estimates.copy()
         summary_stats = [f"{x:.2f}" for x in [v_est_np.max(), v_est_np.min(), v_est_np.mean(),
-                                              np.abs(v_est_np.mean()), v_est_np.std()]]
+                                              np.abs(v_est_np).mean(), v_est_np.std()]]
         summary_stats = "(max, min, mean, |mean|, std) = (" + ", ".join(summary_stats) + ")"
-        self.logger.info(f"\t   v_est: {summary_stats}")
+        corr = np.corrcoef(v_est_np_model, v_est_np)[0, 1] # Compute the correlation of the ys and yhats
+        self.logger.info(f"\t   v_est: {summary_stats}, corr: {corr:.2f}")
 
         # 6). Compute gradients wrt to the MSE Loss function
         # Convert the inputs for this calculation to torch.Tensor and move to self.device

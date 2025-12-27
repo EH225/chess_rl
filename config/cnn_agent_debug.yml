@@ -30,7 +30,7 @@ model_training:
     clip_val: 5.0 # The norm of the gradient vector used in grad clipping
     saving_freq: 3 # The frequency of saving model weights measured in training timesteps
     eval_freq: 3 # The frequency of evaluation runs measured in training timesteps
-    max_eval_moves: 25 # Set the max number of moves per eval self-play game
+    max_eval_moves: 5 # Set the max number of moves per eval self-play game
     compile: False # Whether to compile the model before training
     compile_mode: "default" # The compile mode to use if compile is True
 

@@ -5,6 +5,7 @@ post-processing pipeline.
 import time, sys, logging, yaml, os
 import numpy as np
 import pandas as pd
+import socket
 from typing import Tuple, List
 import matplotlib
 
@@ -12,7 +13,6 @@ matplotlib.use("agg")
 import matplotlib.pyplot as plt
 
 logging.getLogger("matplotlib.font_manager").disabled = True
-
 
 def compute_img_out_dim(input_dims: Tuple[int], kernel_size: int, padding: int = 0, dilation: int = 1,
                         stride: int = 1) -> Tuple[int]:
@@ -114,3 +114,17 @@ class LinearSchedule:
         else:  # After nsteps, set param to param_end
             self.param = self.param_end
         return self.param
+
+
+def get_lan_ip():
+    """
+    Returns the LAN IP of the local network.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # Doesn't need to be reachable — just forces the OS to pick the LAN interface
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    finally:
+        s.close()
+
