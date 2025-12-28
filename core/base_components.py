@@ -17,6 +17,7 @@ from dask.distributed import Client, LocalCluster
 from itertools import batched
 from tqdm.contrib.logging import logging_redirect_tqdm
 from typing import Callable, List, Tuple, Union, Dict, Optional
+import logging
 
 import torch
 import torch.nn as nn
@@ -28,6 +29,7 @@ from utils.chess_env import ChessEnv, save_recording, save_move_stack, create_ep
 from utils.evaluate import evaluate_agent_game
 import core.search_algos as search_algos
 
+logging.getLogger("distributed.utils").setLevel(logging.ERROR)
 
 def setup_path(dask_worker):
     """
@@ -286,12 +288,6 @@ class DVN:
 
         # 2). Split the input state_batch into equal parts according to the number of threads in the cluster
         nthreads = self.dask_client.scheduler_info()["total_threads"]
-        nthreads1 = sum([w.nthreads for w in self.dask_client.cluster.workers.values()])
-        nthreads2 = sum(w["nthreads"] for w in self.dask_client.scheduler_info()["workers"].values())
-        print("nthreads", nthreads) ### TODO: See how many threads this line things there is
-        print("nthreads1", nthreads1)
-        print("nthreads2", nthreads2)
-
         # nthreads = sum([worker.nthreads for worker in self.dask_client.cluster.workers.values()])
         state_batches = list(batched(state_batch, max(1, len(state_batch) // nthreads)))  # Equal parts
 
@@ -535,12 +531,12 @@ class DVN:
         # Final screen updates
         self.logger.info("Training Complete!")
         self.save()  # Save the final model weights after training has finished
-        self.dask_client.shutdown()  # Shutdown the dask cluster after training has finished
         # Run another evaluation episode at the very end, this will auto log the results to the CSV history
         score, states = self.evaluate(num_episodes=self.config["model_training"]["num_episodes_test"],
                                       record_last=self.record, return_states=True)
         duration = time.time() - global_start_time
         self.logger.info(f"Training finished in {duration / 60:.1f} minutes")
+        self.dask_client.shutdown()  # Shutdown the dask cluster after training has finished
 
     def update_step(self, replay_buffer: ReplayBuffer, lr: float, beta: float, t: int) -> Tuple[int, int]:
         """
@@ -579,7 +575,7 @@ class DVN:
         v_est_np = v_est.detach().to(torch.float32).cpu().numpy() # Convert over to numpy for reporting
         summary_stats = [f"{x:.2f}" for x in [v_est_np.max(), v_est_np.min(), v_est_np.mean(),
                                               np.abs(v_est_np).mean(), v_est_np.std()]]
-        summary_stats = "(max, min, mean, |mean|, std) = (" + ", ".join(summary_stats) + ")"
+        summary_stats = "(max, min, mean, abs mean, std) = (" + ", ".join(summary_stats) + ")"
         self.logger.info(f"\t   v_est: {summary_stats}")
         v_est_np_model = v_est_np  # Save the alias
 
@@ -592,7 +588,7 @@ class DVN:
         v_est_np = v_search_estimates.copy()
         summary_stats = [f"{x:.2f}" for x in [v_est_np.max(), v_est_np.min(), v_est_np.mean(),
                                               np.abs(v_est_np).mean(), v_est_np.std()]]
-        summary_stats = "(max, min, mean, |mean|, std) = (" + ", ".join(summary_stats) + ")"
+        summary_stats = "(max, min, mean, abs mean, std) = (" + ", ".join(summary_stats) + ")"
         corr = np.corrcoef(v_est_np_model, v_est_np)[0, 1] # Compute the correlation of the ys and yhats
         self.logger.info(f"\t   v_est: {summary_stats}, corr: {corr:.2f}")
 

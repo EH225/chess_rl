@@ -12,7 +12,7 @@ sys.path.insert(0, PARENT_DIR)
 
 import numpy as np
 import torch, chess
-from utils.chess_env import ChessEnv
+from utils.chess_env import ChessEnv, relative_material_diff
 from scipy.special import softmax
 from typing import Tuple, List, Callable, Optional
 
@@ -451,9 +451,16 @@ class Node_MCTS:
             else:
                 n_eff = child.n_visits + child.virtual_loss  # virtual_loss discourages repeat selections
                 val = child.value_sum / n_eff if n_eff > 0 else 0  # Avoid division by 0 issues
+                # At this node, we will select the the child whose value is most appealing to this node's
+                # perspective, all value_sums are from the root's perspective so flip the signs if this node
+                # is played by the opponent who would want to minimize the return of the root node
+                val *= (1 if self.node_turn == self.root_turn else -1)
                 c_puct = self.c_init + np.log(n_eff + self.c_base + 1) - np.log(self.c_base)
+                # child.prior is recorded from the perspective of the this node, the parent node so no sign
+                # flip is needed, they're also normalized using softmax so it's non-trivial to flip
                 val += c_puct * child.prior * np.sqrt(self.n_visits) / (1 + n_eff)
-                if val > max_val:  # Update the argmax node seen so far
+                if val > max_val:  # Update the argmax node seen so far, select the highest value node among
+                    # all child nodes from this node's turn perspective
                     argmax_node, max_val = child, val
 
         return argmax_node
@@ -484,9 +491,10 @@ class Node_MCTS:
                 if prior_heuristic is None:  # If no prior_heuristic provided, then set to the unif prior 1/n
                     child.prior = uniform_prior
                 else:  # If a prior_heuristic is given, then use it to generate a prior for each child node
-                    # Flip sign if eval from other side so that all are from the perspective of the root node
-                    sign_flip = (1 if child.node_turn == child.root_turn else -1)
-                    child.prior = prior_heuristic(child.state) * sign_flip
+                    # The prior_heuristic will be evaluated from the perspective of the child i.e. the player
+                    # to go next in the child node state, flip the sign since it will only be accessed by
+                    # the parent node in making an expansion selection, will be passed through softmax
+                    child.prior = prior_heuristic(child.state) * (-1)
                 self.children.append(child)
                 board.pop()  # Backtrack to visit the next legal move
                 unvisited_leaf_nodes_chg += 1  # Record another unexplored child node added
@@ -546,7 +554,7 @@ class Node_MCTS:
 
 
 def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: int = 200,
-                            prior_heuristic: Callable = material_heuristic,
+                            prior_heuristic: Callable = relative_material_diff,
                             **kwargs) -> Tuple[int, float, np.ndarray]:
     """
     Performs Monte Carlo Tree Search (MCTS) for n iterations where model is used as a state value approximator

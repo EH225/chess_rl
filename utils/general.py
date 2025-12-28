@@ -62,6 +62,7 @@ def get_logger(log_filename: str) -> logging.Logger:
     logging.getLogger("chess.engine").setLevel(logging.INFO)  # Supress printouts from the chess env
     logging.getLogger("PIL").setLevel(logging.INFO)
     logging.getLogger("PIL.PngImagePlugin").setLevel(logging.INFO)
+    logging.getLogger("distributed.utils").setLevel(logging.ERROR)
     return logger
 
 def runtime(start_time: float) -> str:

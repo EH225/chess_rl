@@ -53,6 +53,46 @@ def material_diff(state: str) -> float:
     return net_material
 
 
+def relative_material_diff(state: str) -> float:
+    """
+    Computes the net relative material difference of the current board state from the perpsective of the
+    player who is to move next where each piece is worth:
+        pawn (0.125), knight (3), bishop (3), rook (5), queen (9), king (0)
+
+    The relative material difference is defined as:
+        (player material) - (opponent material)
+
+    This net material difference is then normalized by min(total_material / 2, 10) where we cap the
+    denominator scaling by 10 so that being up a queen or 2 rooks is almost certainly going to win the
+    game. If the current player is in check, then subtract 0.1 from the score for them, being in check is
+    a vulnerable position and restricts the moves of the player moving next, therefore it should decrease
+    the overall expected reward for the perspective of the player to move next. Final values are clipped
+    at [-1, +1] after this check penality is added.
+
+    :param state: A FEN string denoting the current game state.
+    :return: A float value estimate of the game outcome based on relative material.
+    """
+    board = chess.Board(state)  # Convert to a chess.Board object to access the piece map
+    if board.is_game_over(): # If the game is in an end state, return the terminal reward
+        return -1.0 if board.is_checkmate() else 0.0
+
+    piece_values = {"p": 0.125, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
+    total_material, player_material = 0, 0
+    for p in board.piece_map().values():
+        piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece
+        if board.turn is True and p.symbol().isupper():  # For white, upper-case pieces are friendly
+            player_material += piece_val
+        elif board.turn is False and p.symbol().islower():  # For black, lower-case pieces are friendly
+            player_material += piece_val
+        total_material += piece_val
+
+    net_material = player_material - (total_material - player_material)
+    denom = min(total_material / 2, 10)  # Scaling context for the net_material diff, set it to be half
+    # the total material on the board or at most 20 i.e. being up a queen is 90% going to result in you
+    # winning the game
+    return np.clip(net_material / denom + (-0.2 if board.is_check() else 0), -1, 1)
+
+
 def create_ep_record(move_stack: List[chess.Move]) -> Dict:
     """
     This method takes in a move_stack of legal moves from an original board starting position and runs
