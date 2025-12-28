@@ -91,7 +91,7 @@ def material_heuristic(state: str) -> float:
 # TODO: Section marker
 
 def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **kwargs
-                 ) -> Tuple[int, float, np.ndarray]:
+                 ) -> Tuple[int, float, np.ndarray, Tuple[int]]:
     """
     Performs a naive search operation where the next action selected it the one which results in the highest
     estimated next state value according to the model. This function performs a depth 1 forward search.
@@ -105,6 +105,7 @@ def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **
         - best_action (int): The best action found in the search process.
         - state_value (float): The estimated value of the input starting state.
         - action_values (np.ndarray): The estimated value of each possible next action.
+        - info (Tuple[int]): The total number of nodes evaluated and the max depth of the search tree.
     """
     env = ChessEnv(initial_state=state)  # Instantiate the current game state
     if env.ep_ended:  # If the episode has already ended, then there is no searching over action to be done
@@ -112,7 +113,7 @@ def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **
         # if the game has ended in a checkmate, then the last move from the opponent achieved it and the
         # player to move next has lost, return a value of -1 and 9999 for best_action as a placeholder
         value = -1 if env.board.is_checkmate() else 0
-        return 9999, value, np.zeros(0)
+        return 9999, value, np.zeros(0), (0, 1)
 
     # Else: Perform a search over possible next actions in the env from the current starting state
     action_values = []  # Record a value estimate for each possible next action from the starting state
@@ -152,7 +153,7 @@ def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **
     # Determine the best action and the highest value by computing the argmax and max
     action_values = np.array(action_values)
     best_action, state_value = action_values.argmax(), action_values.max()
-    return best_action, state_value, action_values
+    return best_action, state_value, action_values, (1, len(action_values) + 1)
 
 
 ######################################
@@ -235,7 +236,7 @@ class Node_MMS:
 
 
 def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, horizon: int = 3, **kwargs
-                   ) -> Tuple[int, float, np.ndarray]:
+                   ) -> Tuple[int, float, np.ndarray, Tuple[int]]:
     """
     Performs minimax-search with alpha-beta pruning up to a particular search horizon after which the model
     is used as a value approximator for each state to perform bootstrapping.
@@ -268,6 +269,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
         - best_action (int): The best action found in the search process.
         - state_value (float): The estimated value of the input starting state.
         - action_values (np.ndarray): The estimated value of each possible next action.
+        - info (Tuple[int]): The total number of nodes evaluated and the max depth of the search tree.
     """
     board = chess.Board(state)  # Compute the reward that would have been generated on the move prior to
     # reaching the current game state i.e. +1 reward for the prior player if the board is now a checkmate
@@ -276,11 +278,11 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
     root = Node_MMS(state=state, parent=None, reward=reward)  # Reward flipping done internally
     if root.is_terminal:  # If a terminal state, no searching to be done, use 9999 as the best action
         # placeholder since an integer is expected to be returned
-        return 9999, root.reward, np.zeros(0)
+        return 9999, root.reward, np.zeros(0), (1, 0)
     elif horizon == 0:  # If the horizon is zero, then use the model to evaluate and return that value
         with torch.no_grad(), torch.autocast(device_type=model.device, dtype=torch.bfloat16):
             vale_est = model([state]).cpu().reshape(-1).tolist()[0]
-        return 9999, vale_est, np.zeros(0)
+        return 9999, vale_est, np.zeros(0), (1, 0)
 
     # Run minimax search with alpha-beta pruning using DFS with batched leaf-evaluation
     cache = {}  # Cache model evaluations so that they don't need to be re-run
@@ -361,7 +363,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
     # Once finished with the search process, extract the best action, overall state est, and action values
     action_values = np.array([child.reward + child.value * gamma for child in root.children])
     best_action, state_value = action_values.argmax(), action_values.max()
-    return best_action, state_value, action_values
+    return best_action, state_value, action_values, (count_total_nodes(root), max_depth(root))
 
 
 ####################################
@@ -555,7 +557,7 @@ class Node_MCTS:
 
 def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: int = 200,
                             prior_heuristic: Callable = relative_material_diff,
-                            **kwargs) -> Tuple[int, float, np.ndarray]:
+                            **kwargs) -> Tuple[int, float, np.ndarray, Tuple[int]]:
     """
     Performs Monte Carlo Tree Search (MCTS) for n iterations where model is used as a state value approximator
     to perform bootstrapping.
@@ -571,6 +573,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
         - best_action (int): The best action found in the search process.
         - state_value (float): The estimated value of the input starting state.
         - action_values (np.ndarray): The estimated value of each possible next action.
+        - info (Tuple[int]): The total number of nodes evaluated and the max depth of the search tree.
     """
     cache = {}  # Cache the values output from the model, if we send it the same state 2x re-use prior values
     root = Node_MCTS(state=state, parent=None)  # Create a search tree root node
@@ -638,7 +641,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
     # Now that we have populated the MC tree, identify the best action and the estimated state value
     action_values = np.array([node.Q() for node in root.children])
     best_action, state_value = action_values.argmax(), action_values.max()
-    return best_action, state_value, action_values
+    return best_action, state_value, action_values, (count_total_nodes(root), max_depth(root))
 
 
 #### TODO: DEBUG TESTING ####

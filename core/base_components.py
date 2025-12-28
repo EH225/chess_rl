@@ -31,6 +31,7 @@ import core.search_algos as search_algos
 
 logging.getLogger("distributed.utils").setLevel(logging.ERROR)
 
+
 def setup_path(dask_worker):
     """
     This function is used to make sure all dask workers have the correct python path configured.
@@ -45,6 +46,7 @@ def setup_path(dask_worker):
 def list_files():
     import os
     return os.listdir(os.getcwd())
+
 
 #####################################
 ### Deep Value-Network Definition ###
@@ -253,8 +255,8 @@ class DVN:
         action_values = []  # Collect np.arrays in a list, each can be of variable length
 
         for i, state in enumerate(state_batch):
-            best_action, state_value, action_vals = self._search_func(state=state, model=self.v_network,
-                                                                      **self.config["search_func"])
+            best_action, state_value, action_vals, info = self._search_func(state=state, model=self.v_network,
+                                                                            **self.config["search_func"])
             # Append the results from the search function evaluation of the state to the output lists
             best_actions[i] = best_action
             state_values[i] = state_value
@@ -262,7 +264,7 @@ class DVN:
 
         return np.array(best_actions), np.array(state_values), action_values
 
-    def compute_td_targets(self, state_batch: List[str], t: int) -> np.ndarray:
+    def compute_td_targets(self, state_batch: List[str], t: int) -> Tuple[np.ndarray]:
         """
         This method is used to compute the TD targets in parallel using dask which are used during training
         and are the most time consuming part of the training process. Each TD target calculation can be done
@@ -273,8 +275,9 @@ class DVN:
             from various starting positions.
         :param t: The current training time step. This is used to control which search function and value
             estimator is used when generating the TD target values.
-        :return: A np.ndarray of the same length as state_batch with an estimated state value from each
-            derived from the v_network model and search function.
+        :return: A lenght 3 tuple of np.ndarrays of the same length as state_batch with an estimated state
+            value from each derived from the v_network model and search function along with the total nodes
+            evaluated and the max depth of each seach tree.
         """
         # 1). Save the current model weights so that they can be read from disk by each dask worker
         save_dir = self.config["output"]["model_output"]
@@ -282,9 +285,11 @@ class DVN:
         if self.v_network is not None:  # If a v_network has been instantiated, save its weights
             torch.save(self.v_network.state_dict(), os.path.join(save_dir, "model.bin"))
         # Don't need to save the optimizer state here, we only will load in the model
-        start_time = time.perf_counter() # Track how long the full training iteration takes
-        self.dask_client.upload_file(os.path.join(save_dir, "model.bin"))  # Update the model wts across dask
-        self.logger.info(f"\t   Model weights uploaded to dask workers ({runtime(start_time)})")
+        if self.config["model_training"]["local_cluster_only"] is False:  # To support other computing
+            # resources, broadcast out the model weights to all dask workers to read from disk
+            start_time = time.perf_counter()  # Track how long the full training iteration takes
+            self.dask_client.upload_file(os.path.join(save_dir, "model.bin"))
+            self.logger.info(f"\t   Model weights uploaded to dask workers ({runtime(start_time)})")
 
         # 2). Split the input state_batch into equal parts according to the number of threads in the cluster
         nthreads = self.dask_client.scheduler_info()["total_threads"]
@@ -294,13 +299,16 @@ class DVN:
         # 3). Run the results in parallel using dask to speed up computations
         futures = [self.dask_client.submit(self._compute_td_targets, batch, self.config, t)
                    for batch in state_batches]
-        results = []  # Consolidate the results in-order back into a list and then return a np.ndarray
+        state_values, total_nodes, max_depths = [], [], []
         for res in self.dask_client.gather(futures):
-            results.extend(list(res))
-        return np.array(results)
+            state_values.append(res["state_values"])
+            total_nodes.append(res["total_nodes"])
+            max_depths.append(res["max_depths"])
+
+        return np.concatenate(state_values), np.concatenate(total_nodes), np.concatenate(max_depths)
 
     @staticmethod
-    def _compute_td_targets(state_batch: List[str], config: Dict) -> np.ndarray:
+    def _compute_td_targets(state_batch: List[str], config: Dict) -> Dict[np.ndarray]:
         """
         This method sequentially computes the estimated value of each state in state_batch using the search
         function and model specified in the input config dictionary. A model instance is instantiated and the
@@ -309,7 +317,8 @@ class DVN:
         using dask.
 
         :param config: A config dictionary read from yaml that specifies hyperparameters.
-        :return: A np.ndarray of the same size as state_batch with state value estimates for each.
+        :return: A dictionary of np.ndarrays of the same size as state_batch with state value estimates for
+            each state, the number of nodes evaluated, and the max depth of each search tree.
         """
         raise NotImplementedError
 
@@ -329,14 +338,18 @@ class DVN:
         if self.v_network is not None:  # If a v_network has been instantiated, save its weights
             torch.save(self.v_network.state_dict(), os.path.join(save_dir, "model.bin"))
         # Don't need to save the optimizer state here, we only will load in the model
-        self.dask_client.upload_file(os.path.join(save_dir, "model.bin"))  # Update the model wts across dask
+        if self.config["model_training"]["local_cluster_only"] is False:  # To support other computing
+            # resources, broadcast out the model weights to all dask workers to read from disk
+            start_time = time.perf_counter()  # Track how long the full training iteration takes
+            self.dask_client.upload_file(os.path.join(save_dir, "model.bin"))
+            self.logger.info(f"\t   Model weights uploaded to dask workers ({runtime(start_time)})")
 
         # 2). Run the games in parallel and aggregate the results from each
         # In order to get different results from each _run_game call, we have to differentiate the input so
         # we pass in i, the int counter which has no effect on the simulated games themselves
         futures = [self.dask_client.submit(self._run_game, epsilon, self.config, i) for i in range(n_games)]
         ep_records = []  # Collect the episode records from each game
-        all_states = [] # Aggregate all the on-policy states generated from all n_games
+        all_states = []  # Aggregate all the on-policy states generated from all n_games
         for (states, ep_record) in self.dask_client.gather(futures):
             ep_record["t"] = t
             ep_records.append(ep_record)
@@ -416,7 +429,7 @@ class DVN:
 
         local_cluster = LocalCluster(ip=get_lan_ip(), threads_per_worker=1, scheduler_port=8786,
                                      local_directory=PARENT_DIR)
-        self.dask_client = Client(local_cluster) # Create a scheduler and connect it with the local cluster
+        self.dask_client = Client(local_cluster)  # Create a scheduler and connect it with the local cluster
         self.dask_client.register_worker_callbacks(setup_path)  # Configure sys.path of all workers
         # For any other computer on the network, activate the chess_rl venv and then run to add resources:
         #    dask-worker tcp://192.168.12.227:8786 --nthreads 11 --nworkers 16
@@ -463,13 +476,13 @@ class DVN:
         # before entering the main training loop
         exp_schedule.update(t)  # Update the epsilon obj before passing into the method below
         states = self.run_games(self.config["hyper_params"]["warm_up"], exp_schedule.param, t)
-        replay_buffer.add_entries(states) # Add the on policy states generated during the eval game
+        replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
 
         # 5). If we're starting from scratch, then run an eval episode to log the untrained performance
         if t == 0:
             score, states = self.evaluate(num_episodes=self.config["model_training"]["num_episodes_test"],
                                           record_last=self.record, return_states=True)
-            replay_buffer.add_entries(states) # Add the on policy states generated during the eval game
+            replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
 
         # 5). Run the full training loop, generate on-policy games, perform param updates, run evals
         n_steps_train = self.config["hyper_params"]["nsteps_train"]
@@ -479,13 +492,13 @@ class DVN:
             lr_schedule.update(t)
             beta_schedule.update(t)
 
-            self.logger.info(f"\n[{t+1}/{n_steps_train}] ({(t+1)/n_steps_train:.2%}) " + "-" * 100)
-            iter_start = time.perf_counter() # Track how long the full training iteration takes
+            self.logger.info(f"\n[{t + 1}/{n_steps_train}] ({(t + 1) / n_steps_train:.2%}) " + "-" * 100)
+            iter_start = time.perf_counter()  # Track how long the full training iteration takes
             # A). Play a series of on-policy games in parallel using dask to generate new states
-            start_time = time.perf_counter() # Measure how long each step takes as well
+            start_time = time.perf_counter()  # Measure how long each step takes as well
             n_games = self.config["hyper_params"]["learning_freq"]
             states = self.run_games(n_games, exp_schedule.param, t)
-            replay_buffer.add_entries(states) # Add the on policy states generated during the eval game
+            replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
             msg = (f"\t{n_games} games and {len(states)} states generated with eps: {exp_schedule.param:.6f} "
                    f" ({runtime(start_time)})")
             self.logger.info(msg)
@@ -493,7 +506,7 @@ class DVN:
             # B). Perform training parameter update steps by sampling from the replay buffer
             for i in range(self.config["hyper_params"]["learning_updates"]):
                 self.logger.info("\tStarting gradient update step...")
-                start_time = time.perf_counter() # Measure how long each step takes
+                start_time = time.perf_counter()  # Measure how long each step takes
                 lr, beta = lr_schedule.param, beta_schedule.param
                 loss, grad_norm = self.update_step(replay_buffer, lr, beta, t)
                 msg = (f"\tGradient update complete with lr: {lr:.6f}, beta: {beta:.4f}, loss: {loss:.4f}, "
@@ -502,14 +515,14 @@ class DVN:
 
             # C). Periodically save the model weights and optimizer state during training
             if t > 0 and t % self.config["model_training"]["saving_freq"] == 0:
-                start_time = time.perf_counter() # Measure how long each step takes
+                start_time = time.perf_counter()  # Measure how long each step takes
                 self.save()
                 self.logger.info(f"\tModel saved ({runtime(start_time)})")
 
             if t == self.config["pre_train"]["nsteps_pretrain"] - 1:
                 # If this is the last iteration of the pre-training, then save the model weights to a
                 # separate location so that we have an archive of them to compare vs the final weights
-                start_time = time.perf_counter() # Measure how long each step takes
+                start_time = time.perf_counter()  # Measure how long each step takes
                 save_dir = os.path.join(self.config["output"]["model_output"], "pretraining")
                 os.makedirs(save_dir, exist_ok=True)  # Make dir if needed
                 torch.save(self.v_network.state_dict(), os.path.join(save_dir, "pretrain_model.bin"))
@@ -517,11 +530,11 @@ class DVN:
 
             # D). Periodically run an evaluation episode
             if t > 0 and t % self.config["model_training"]["eval_freq"] == 0:
-                start_time = time.perf_counter() # Measure how long each step takes
+                start_time = time.perf_counter()  # Measure how long each step takes
                 n_ep = self.config["model_training"]["num_episodes_test"]
                 score, states = self.evaluate(num_episodes=n_ep, record_last=self.record,
                                               return_states=True)  # Compute a new eval score value
-                replay_buffer.add_entries(states) # Add the on policy states generated during the eval game
+                replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
                 msg = f"\t{n_ep} eval episode(s) run with score: {score:.1f} ({runtime(start_time)})"
                 self.logger.info(msg)
 
@@ -552,7 +565,7 @@ class DVN:
         batch_size = self.config["hyper_params"]["batch_size"]
 
         # 1). Sample from the reply buffer to get recent states (encoded a FEN strings)
-        start_time = time.perf_counter() # Measure how long each step takes
+        start_time = time.perf_counter()  # Measure how long each step takes
         state_batch, wts, indices = replay_buffer.sample(batch_size, beta)
         self.logger.info(f"\t   Sampled from replay buffer ({runtime(start_time)})")
 
@@ -568,36 +581,38 @@ class DVN:
         # 4). Run a forward pass of the batch of states through the v_network and generate value estimates
         # i.e. what the v_network estimates is the discounted future return of following an optimal policy
         # from each state as the initial starting state
-        start_time = time.perf_counter() # Measure how long each step takes
+        start_time = time.perf_counter()  # Measure how long each step takes
         with torch.autocast(device_type=self.device, dtype=torch.bfloat16):  # Use BFloat16
             v_est = self.v_network(state_batch).reshape(-1)  # Returns a torch.Tensor on self.device
         self.logger.info(f"\t   {len(v_est)} y-hat state value estimates generated ({runtime(start_time)})")
-        v_est_np = v_est.detach().to(torch.float32).cpu().numpy() # Convert over to numpy for reporting
+        v_est_np = v_est.detach().to(torch.float32).cpu().numpy()  # Convert over to numpy for reporting
         summary_stats = [f"{x:.2f}" for x in [v_est_np.max(), v_est_np.min(), v_est_np.mean(),
                                               np.abs(v_est_np).mean(), v_est_np.std()]]
         summary_stats = "(max, min, mean, abs mean, std) = (" + ", ".join(summary_stats) + ")"
-        self.logger.info(f"\t   v_est: {summary_stats}")
+        self.logger.info(f"\t   y-hat v_est: {summary_stats}")
         v_est_np_model = v_est_np  # Save the alias
 
         # 5). Compute the TD target values using a search function to get more accurate values by looking
         # ahead, we want to train the network to estimate this search function in the forward pass
-        start_time = time.perf_counter() # Measure how long each step takes
-        v_search_estimates = self.compute_td_targets(state_batch, t)
+        start_time = time.perf_counter()  # Measure how long each step takes
+        v_search_estimates, total_nodes, max_depths = self.compute_td_targets(state_batch, t)
         msg = f"\t   {len(v_search_estimates)} y state value estimates generated ({runtime(start_time)})"
         self.logger.info(msg)
         v_est_np = v_search_estimates.copy()
         summary_stats = [f"{x:.2f}" for x in [v_est_np.max(), v_est_np.min(), v_est_np.mean(),
                                               np.abs(v_est_np).mean(), v_est_np.std()]]
         summary_stats = "(max, min, mean, abs mean, std) = (" + ", ".join(summary_stats) + ")"
-        corr = np.corrcoef(v_est_np_model, v_est_np)[0, 1] # Compute the correlation of the ys and yhats
-        self.logger.info(f"\t   v_est: {summary_stats}, corr: {corr:.2f}")
+        corr = np.corrcoef(v_est_np_model, v_est_np)[0, 1]  # Compute the correlation of the ys and yhats
+        msg = f"\t   y v_est: {summary_stats}, corr: {corr:.2f}"  # Report the corr of (y, y_hat)
+        msg += " avg_total_nodes: {total_nodes.mean()}, avg_max_depth: {max_depths.mean()}"
+        self.logger.info(msg)
 
         # 6). Compute gradients wrt to the MSE Loss function
         # Convert the inputs for this calculation to torch.Tensor and move to self.device
         wts = torch.from_numpy(wts).to(self.device)
         v_search_estimates = torch.from_numpy(v_search_estimates).to(self.device)
 
-        start_time = time.perf_counter() # Measure how long each step takes
+        start_time = time.perf_counter()  # Measure how long each step takes
         loss, td_errors = self.calc_loss(v_est, v_search_estimates, wts)  # td_errors is a np.array
         replay_buffer.update_priorities(indices, td_errors)  # Update the priorities for the obs sampled
         loss.backward()  # Compute gradients wrt to the trainable parameters of self.v_network
@@ -657,7 +672,7 @@ class DVN:
             self.logger.info(f"\nOverall ACPL: {overall_acpl:.1f}")
 
         if record_last is True:  # Save the last evaluation episode as a recording
-            episode_id = 0 # Default to 0 to start with
+            episode_id = 0  # Default to 0 to start with
             # Ideally we want to keep the episode_id recording numbers in sync with the eval history episodes
             ep_df_file_path = os.path.join(self.config["output"]["plot_output"], "eval_ep_history.csv")
             if os.path.exists(ep_df_file_path):  # Check if a eval_ep_history.csv file exists
@@ -714,18 +729,18 @@ class DVN:
         :return: None. Records a video of a self-play game and saves it to disk.
         """
         env = ChessEnv(step_limit=max_moves, record_dir=self.config["output"]["record_path"])
-        if episode_id is None: # If not specified, then attempt to infer from the existing directory
-            episode_id = 0 # Default to 0
+        if episode_id is None:  # If not specified, then attempt to infer from the existing directory
+            episode_id = 0  # Default to 0
             for file_name in os.listdir(self.config["output"]["record_path"]):
-                if os.path.isdir(file_name): # If it's a directory, try to parse
-                    try: # Expected directory names: "game-{int}"
+                if os.path.isdir(file_name):  # If it's a directory, try to parse
+                    try:  # Expected directory names: "game-{int}"
                         episode_id = max(episode_id, int(file_name.split("-")[-1]) + 1)
                     except:
                         pass
         env.episode_id = episode_id  # Set for recording
         state = env.reset()
         env.record = True  # Toggle on the recording setting within the ChessEnv
-        policy = self.policy() # Create a policy func that return the best move index according to the model
+        policy = self.policy()  # Create a policy func that return the best move index according to the model
 
         terminated, truncated = False, False
         while not (terminated or truncated):

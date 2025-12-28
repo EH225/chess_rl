@@ -520,7 +520,7 @@ class ChessAgent(DVN):
         return self.forward(state_batch)
 
     @staticmethod
-    def _compute_td_targets(state_batch: List[str], config: Dict, t: int) -> np.ndarray:
+    def _compute_td_targets(state_batch: List[str], config: Dict, t: int) -> Dict[np.ndarray]:
         """
         This method sequentially computes the estimated value of each state in state_batch using the search
         function and model specified in the input config dictionary. A model instance is instantiated and the
@@ -532,7 +532,8 @@ class ChessAgent(DVN):
         :param config: A config dictionary read from yaml that specifies hyperparameters.
         :param t: The current training time step. This is used to control which search function and value
             estimator is used when generating the TD target values.
-        :return: A np.ndarray of the same size as state_batch with state value estimates for each.
+        :return: A dictionary of np.ndarrays of the same size as state_batch with state value estimates for
+            each state, the number of nodes evaluated, and the max depth of each search tree.
         """
         if isinstance(state_batch, str):  # Accept a lone string, convert it to a list of size 1
             state_batch = [state_batch, ]  # All lines below expect state_batch to be a list
@@ -544,13 +545,18 @@ class ChessAgent(DVN):
             v_network = globals()[config["model_class"]](config)
 
         # 2). Load in the weights of the model
-        if t >= config["pre_train"]["nsteps_pretrain"]:
-            # Load in the model weights from the local dask working directory, the main thread uploads them
-            worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
-            subfolders = set([x for x in os.listdir(worker_temp_dir)
-                              if os.path.isdir(os.path.join(worker_temp_dir, x))])
-            wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model.bin")
-            v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+        if t >= config["pre_train"]["nsteps_pretrain"]:  # Not weight loading needed during pre-training,
+            # the value estimator model used is the heuristic model which has no trainable parameters
+            if config["model_training"]["local_cluster_only"] is False:
+                # Load in the model weights from the local dask working directory, which were broadcasted out
+                worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
+                subfolders = set([x for x in os.listdir(worker_temp_dir)
+                                  if os.path.isdir(os.path.join(worker_temp_dir, x))])
+                wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model.bin")
+                v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+            else:  # Otherwise, read the model weights in from the local directory location
+                wts_path = os.path.join(config["model_training"]["load_dir"], "model.bin")
+                v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
 
         # 3). Determine the search function specified by the config
         if t < config["pre_train"]["nsteps_pretrain"]:
@@ -562,11 +568,15 @@ class ChessAgent(DVN):
 
         # 4). Compute the TD targets sequentially using the search function
         state_values = np.zeros(len(state_batch), dtype=np.float32)  # 1 float state estimate per state
+        total_nodes = np.zerps(len(state_batch), dtype=np.int8)
+        max_depths = np.zerps(len(state_batch), dtype=np.int8)
         for i, state in enumerate(state_batch):
-            _, state_value, _ = search_func(state=state, model=v_network, **search_func_kwargs)
+            _, state_value, _, info = search_func(state=state, model=v_network, **search_func_kwargs)
             state_values[i] = state_value
+            total_nodes[i] = info[0]
+            max_depths[i] = info[1]
 
-        return state_values
+        return {"state_values": state_values, "total_nodes": total_nodes, "max_depths": max_depths}
 
     @staticmethod
     def _run_game(epsilon: float, config: Dict, *args, **kwargs) -> Tuple[List[str], Dict]:
@@ -582,13 +592,17 @@ class ChessAgent(DVN):
         # 1). Init the right kind of v_network model according to the config passed
         v_network = globals()[config["model_class"]](config)
 
-        # 2). Load in the weights of the model
-        # Load in the model weights from the local dask working directory, the main thread uploads them
-        worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
-        subfolders = set([x for x in os.listdir(worker_temp_dir)
-                          if os.path.isdir(os.path.join(worker_temp_dir, x))])
-        wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model.bin")
-        v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+        # 2). Load in the weights of the model for on-policy state generation
+        if config["model_training"]["local_cluster_only"] is False:
+            # Load in the model weights from the local dask working directory, which were broadcasted out
+            worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
+            subfolders = set([x for x in os.listdir(worker_temp_dir)
+                              if os.path.isdir(os.path.join(worker_temp_dir, x))])
+            wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model.bin")
+            v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+        else:  # Otherwise, read the model weights in from the local directory location
+            wts_path = os.path.join(config["model_training"]["load_dir"], "model.bin")
+            v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
 
         # 3). Create a chess env and prepare recording variables
         env = ChessEnv()
@@ -603,8 +617,8 @@ class ChessAgent(DVN):
             if np.random.rand() < epsilon:  # With probability epsilon, choose a random action
                 action, state_value, action_values = env.action_space.sample(), 0, np.zeros(0)
             else:  # Otherwise actually use the model to evaluate
-                action, state_value, action_values = search_func(state=state, model=v_network,
-                                                                 **config["search_func"])
+                action, state_value, action_values, info = search_func(state=state, model=v_network,
+                                                                       **config["search_func"])
 
             # Perform the selected action in the env, get the new state, reward, and stopping flags
             new_state, reward, terminated, truncated = env.step(action)
