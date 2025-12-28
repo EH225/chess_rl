@@ -586,10 +586,12 @@ class ChessAgent(DVN):
 
         # 2). Load in the weights of the model
         if t >= config["pre_train"]["nsteps_pretrain"]:
-            load_dir = config["model_training"]["load_dir"]
-            wts_path = os.path.join(load_dir, "model.bin")
-            wts = torch.load(wts_path, map_location="cpu", weights_only=True)
-            v_network.load_state_dict(wts)
+            # Load in the model weights from the local dask working directory, the main thread uploads them
+            worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
+            subfolders = set([x for x in os.listdir(worker_temp_dir)
+                              if os.path.isdir(os.path.join(worker_temp_dir, x))])
+            wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model.bin")
+            v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
 
         # 3). Determine the search function specified by the config
         if t < config["pre_train"]["nsteps_pretrain"]:
@@ -622,10 +624,12 @@ class ChessAgent(DVN):
         v_network = globals()[config["model_class"]](config)
 
         # 2). Load in the weights of the model
-        load_dir = config["model_training"]["load_dir"]
-        wts_path = os.path.join(load_dir, "model.bin")
-        wts = torch.load(wts_path, map_location="cpu", weights_only=True)
-        v_network.load_state_dict(wts)
+        # Load in the model weights from the local dask working directory, the main thread uploads them
+        worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
+        subfolders = set([x for x in os.listdir(worker_temp_dir)
+                          if os.path.isdir(os.path.join(worker_temp_dir, x))])
+        wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model.bin")
+        v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
 
         # 3). Create a chess env and prepare recording variables
         env = ChessEnv()

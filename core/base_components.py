@@ -40,6 +40,10 @@ def setup_path(dask_worker):
         sys.path.insert(0, PARENT_DIR)
 
 
+def list_files():
+    import os
+    return os.listdir(os.getcwd())
+
 #####################################
 ### Deep Value-Network Definition ###
 #####################################
@@ -276,9 +280,11 @@ class DVN:
         if self.v_network is not None:  # If a v_network has been instantiated, save its weights
             torch.save(self.v_network.state_dict(), os.path.join(save_dir, "model.bin"))
         # Don't need to save the optimizer state here, we only will load in the model
+        self.dask_client.upload_file(os.path.join(save_dir, "model.bin"))  # Update the model wts across dask
 
         # 2). Split the input state_batch into equal parts according to the number of threads in the cluster
-        nthreads = sum([worker.nthreads for worker in self.dask_client.cluster.workers.values()])
+        nthreads = sum(w["nthreads"] for w in self.dask_client.scheduler_info()["workers"].values())
+        # nthreads = sum([worker.nthreads for worker in self.dask_client.cluster.workers.values()])
         state_batches = list(batched(state_batch, max(1, len(state_batch) // nthreads)))  # Equal parts
 
         # 3). Run the results in parallel using dask to speed up computations
@@ -319,6 +325,7 @@ class DVN:
         if self.v_network is not None:  # If a v_network has been instantiated, save its weights
             torch.save(self.v_network.state_dict(), os.path.join(save_dir, "model.bin"))
         # Don't need to save the optimizer state here, we only will load in the model
+        self.dask_client.upload_file(os.path.join(save_dir, "model.bin"))  # Update the model wts across dask
 
         # 2). Run the games in parallel and aggregate the results from each
         # In order to get different results from each _run_game call, we have to differentiate the input so
@@ -403,7 +410,8 @@ class DVN:
         self.logger.info(f"Training model: {self.config['model']}")
         self.logger.info(f"Running model training on device: {self.device}")
 
-        local_cluster = LocalCluster(ip=get_lan_ip(), threads_per_worker=1, scheduler_port=8786)
+        local_cluster = LocalCluster(ip=get_lan_ip(), threads_per_worker=1, scheduler_port=8786,
+                                     local_directory=PARENT_DIR)
         self.dask_client = Client(local_cluster) # Create a scheduler and connect it with the local cluster
         self.dask_client.register_worker_callbacks(setup_path)  # Configure sys.path of all workers
         # For any other computer on the network, activate the chess_rl venv and then run to add resources:
@@ -467,7 +475,7 @@ class DVN:
             lr_schedule.update(t)
             beta_schedule.update(t)
 
-            self.logger.info(f"\n[{t+1}/{n_steps_train}] ({(t+1)/n_steps_train:.2%}) " + "." * 100)
+            self.logger.info(f"\n[{t+1}/{n_steps_train}] ({(t+1)/n_steps_train:.2%}) " + "-" * 100)
             iter_start = time.perf_counter() # Track how long the full training iteration takes
             # A). Play a series of on-policy games in parallel using dask to generate new states
             start_time = time.perf_counter() # Measure how long each step takes as well
