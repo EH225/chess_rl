@@ -20,6 +20,7 @@ import core.search_algos as search_algos
 from utils.chess_env import ChessEnv, create_ep_record, relative_material_diff
 from typing import Tuple, List, Dict
 
+
 ##################################################
 ### Pre-Training Material Heuristic Definition ###
 ##################################################
@@ -520,7 +521,7 @@ class ChessAgent(DVN):
         return self.forward(state_batch)
 
     @staticmethod
-    def _compute_td_targets(state_batch: List[str], config: Dict, t: int) -> Dict[np.ndarray]:
+    def _compute_td_targets(state_batch: List[str], config: Dict, t: int) -> Dict[str, np.ndarray]:
         """
         This method sequentially computes the estimated value of each state in state_batch using the search
         function and model specified in the input config dictionary. A model instance is instantiated and the
@@ -613,7 +614,7 @@ class ChessAgent(DVN):
         search_func = getattr(search_algos, config["search_func"]["name"])
 
         # 5). Run a self-play game until truncation or termination
-        while True: # Run until the episode has finished
+        while True:  # Run until the episode has finished
             if np.random.rand() < epsilon:  # With probability epsilon, choose a random action
                 action, state_value, action_values = env.action_space.sample(), 0, np.zeros(0)
             else:  # Otherwise actually use the model to evaluate

@@ -10,6 +10,7 @@ from utils.chess_env import ChessEnv
 from core.torch_models import ChessAgent
 from IPython.display import display, clear_output
 
+
 def interactive_match(config_name: str, player_color: str = "white", state: str = None) -> None:
     """
     This function allows a user to play an interactive match vs one of the RL chess agents saved to disk in
@@ -35,18 +36,18 @@ def interactive_match(config_name: str, player_color: str = "white", state: str 
     check = board.king(board.turn) if board.is_check() else None
     display(chess.svg.board(board, orientation=player_color, check=check))
 
-    while not board.is_game_over(): # Play until the game is finished
+    while not board.is_game_over():  # Play until the game is finished
         if board.turn == player_color:
             move_valid = False
             while not move_valid:
                 try:
                     player_move_san = input("Input move in SAN: ")
-                    if player_move_san == "quit": # Exit immediately if the user enters "quit"
+                    if player_move_san == "quit":  # Exit immediately if the user enters "quit"
                         return None
                     elif player_move_san == "undo" and len(board.move_stack) >= 2:
                         # Undo the last 2 moves to get back to your last move
-                        board.pop() # Undo opponent's last move
-                        board.pop() # Undo player's last move before that
+                        board.pop()  # Undo opponent's last move
+                        board.pop()  # Undo player's last move before that
                         if len(board.move_stack) > 0:
                             check = board.king(board.turn) if board.is_check() else None
                             display(chess.svg.board(board, orientation=player_color, lastmove=board.peek(),
@@ -58,7 +59,7 @@ def interactive_match(config_name: str, player_color: str = "white", state: str 
                         move_valid = True
                 except:
                     print("Move invalid, please try again")
-        else: # Otherwise it's the turn of the AI chess bot RL agent to play
+        else:  # Otherwise it's the turn of the AI chess bot RL agent to play
             move = model.agent_move_func(board)
             board.push(move)
         check = board.king(board.turn) if board.is_check() else None

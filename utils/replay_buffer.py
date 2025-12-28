@@ -68,6 +68,7 @@ class ReplayBuffer:
         self.alpha = float(alpha)  # Controls how much more we sample high priority obs, alpha=0 equal prob
         self.max_priority = float(eps)  # The priority values are all initialized at eps
 
+
         self.seed = seed  # Store the random seed provided if any
         self.rng = np.random.default_rng(seed)  # Create a random number generator for sampling with a seed
 

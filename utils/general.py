@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 
 logging.getLogger("matplotlib.font_manager").disabled = True
 
+
 def compute_img_out_dim(input_dims: Tuple[int], kernel_size: int, padding: int = 0, dilation: int = 1,
                         stride: int = 1) -> Tuple[int]:
     """
@@ -64,6 +65,7 @@ def get_logger(log_filename: str) -> logging.Logger:
     logging.getLogger("PIL.PngImagePlugin").setLevel(logging.INFO)
     logging.getLogger("distributed.utils").setLevel(logging.ERROR)
     return logger
+
 
 def runtime(start_time: float) -> str:
     """
@@ -128,4 +130,3 @@ def get_lan_ip():
         return s.getsockname()[0]
     finally:
         s.close()
-

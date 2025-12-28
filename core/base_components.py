@@ -308,7 +308,7 @@ class DVN:
         return np.concatenate(state_values), np.concatenate(total_nodes), np.concatenate(max_depths)
 
     @staticmethod
-    def _compute_td_targets(state_batch: List[str], config: Dict) -> Dict[np.ndarray]:
+    def _compute_td_targets(state_batch: List[str], config: Dict) -> Dict[str, np.ndarray]:
         """
         This method sequentially computes the estimated value of each state in state_batch using the search
         function and model specified in the input config dictionary. A model instance is instantiated and the

@@ -73,7 +73,7 @@ def relative_material_diff(state: str) -> float:
     :return: A float value estimate of the game outcome based on relative material.
     """
     board = chess.Board(state)  # Convert to a chess.Board object to access the piece map
-    if board.is_game_over(): # If the game is in an end state, return the terminal reward
+    if board.is_game_over():  # If the game is in an end state, return the terminal reward
         return -1.0 if board.is_checkmate() else 0.0
 
     piece_values = {"p": 0.125, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
