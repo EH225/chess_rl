@@ -280,10 +280,18 @@ class DVN:
         if self.v_network is not None:  # If a v_network has been instantiated, save its weights
             torch.save(self.v_network.state_dict(), os.path.join(save_dir, "model.bin"))
         # Don't need to save the optimizer state here, we only will load in the model
+        start_time = time.perf_counter() # Track how long the full training iteration takes
         self.dask_client.upload_file(os.path.join(save_dir, "model.bin"))  # Update the model wts across dask
+        self.logger.info(f"\t   Model weights uploaded to dask workers ({runtime(start_time)})")
 
         # 2). Split the input state_batch into equal parts according to the number of threads in the cluster
-        nthreads = sum(w["nthreads"] for w in self.dask_client.scheduler_info()["workers"].values())
+        nthreads = self.dask_client.scheduler_info()["total_threads"]
+        nthreads1 = sum([w.nthreads for w in self.dask_client.cluster.workers.values()])
+        nthreads2 = sum(w["nthreads"] for w in self.dask_client.scheduler_info()["workers"].values())
+        print("nthreads", nthreads) ### TODO: See how many threads this line things there is
+        print("nthreads1", nthreads1)
+        print("nthreads2", nthreads2)
+
         # nthreads = sum([worker.nthreads for worker in self.dask_client.cluster.workers.values()])
         state_batches = list(batched(state_batch, max(1, len(state_batch) // nthreads)))  # Equal parts
 
