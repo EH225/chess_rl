@@ -43,7 +43,7 @@ hyper_params:
     gamma: 1.00 # The temporal discount factor of future rewards
     learning_freq: 16 # How many on policy games to simulate between learning updates
     learning_updates: 4 # The number of learning update batches run each at each update interval 
-    warm_up: 48 # The number of games to run as a warm up before training actually begins
+    warm_up: 16 # The number of games to run as a warm up before training actually begins
     wt_decay: 0.00005 # Set an L2 regularization amount
 
     lr_begin: 0.0001 # The first value of the learning rate

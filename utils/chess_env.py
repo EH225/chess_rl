@@ -54,10 +54,10 @@ def material_diff(state: str) -> float:
 
 
 def relative_material_diff(state: str) -> float:
-    """
+    """ ## TODO This needs updating
     Computes the net relative material difference of the current board state from the perpsective of the
     player who is to move next where each piece is worth:
-        pawn (0.125), knight (3), bishop (3), rook (5), queen (9), king (0)
+        pawn (0.125), knight (3), bishop (3), rook (5), queen (10), king (0)
 
     The relative material difference is defined as:
         (player material) - (opponent material)
@@ -76,7 +76,7 @@ def relative_material_diff(state: str) -> float:
     if board.is_game_over():  # If the game is in an end state, return the terminal reward
         return -1.0 if board.is_checkmate() else 0.0
 
-    piece_values = {"p": 0.125, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
+    piece_values = {"p": 0.125, "n": 3, "b": 3, "r": 5, "q": 10, "k": 0}
     total_material, player_material = 0, 0
     for p in board.piece_map().values():
         piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece
@@ -86,11 +86,11 @@ def relative_material_diff(state: str) -> float:
             player_material += piece_val
         total_material += piece_val
 
-    net_material = player_material - (total_material - player_material)
-    denom = min(total_material / 2, 10)  # Scaling context for the net_material diff, set it to be half
+    # net_material = player_material - (total_material - player_material)
+    # denom = min(total_material / 2, 10)  # Scaling context for the net_material diff, set it to be half
     # the total material on the board or at most 20 i.e. being up a queen is 90% going to result in you
     # winning the game
-    return np.clip(net_material / denom + (-0.2 if board.is_check() else 0), -1, 1)
+    return np.clip((player_material / total_material) * 2 - 1 + (-0.1 if board.is_check() else 0), -1, 1)
 
 
 def create_ep_record(move_stack: List[chess.Move]) -> Dict:

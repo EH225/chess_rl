@@ -37,6 +37,7 @@ def interactive_match(config_name: str, player_color: str = "white", state: str 
     display(chess.svg.board(board, orientation=player_color, check=check))
 
     while not board.is_game_over():  # Play until the game is finished
+        print(board.fen()) # Show the FEN of the game on each turn before the next move is made
         if board.turn == player_color:
             move_valid = False
             while not move_valid:
@@ -65,10 +66,11 @@ def interactive_match(config_name: str, player_color: str = "white", state: str 
         check = board.king(board.turn) if board.is_check() else None
         display(chess.svg.board(board, orientation=player_color, lastmove=board.peek(), check=check))
 
+    print(board.fen()) # Report the FEN of the game on the last move as well
     outcome = board.outcome()
     msg = ("- black wins!" if board.turn else "- white wins!") if board.is_checkmate() else ""
     print(f"Outcome: {outcome.termination.name} {msg}")
 
 
 if __name__ == "__main__":
-    interactive_match("mlp_agent", "white")
+    interactive_match("heuristic_agent", "white")

@@ -27,9 +27,10 @@ from typing import Tuple, List, Dict
 # TODO: Section marker
 
 class MaterialHeuristic(nn.Module):
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         super().__init__()
         self.device = "cpu"  # Alwys run on the CPU
+        self.pos_embeddings = nn.Parameter(torch.zeros(1)) # Needs a parameter for the optimizer init
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -490,14 +491,10 @@ class ChessAgent(DVN):
         state. self.v_network will be the learned value-function approximator. This method also instantiates
         an optimizer for training.
         """
-        if self.config["model_class"] == "MLP":
-            model_class = MLP
-        elif self.config["model_class"] == "CNN":
-            model_class = CNN
-        elif self.config["model_class"] == "Transformer":
-            model_class = Transformer
-        else:
-            raise ValueError(f"Model type from config not recognized: {self.config['model']['type']}")
+        try:
+            model_class = globals()[self.config["model_class"]]
+        except:
+            raise ValueError(f"Model type from config not recognized: {self.config['model_class']}")
 
         self.v_network = model_class(self.config)  # Init the value network using the config file
 
@@ -534,7 +531,8 @@ class ChessAgent(DVN):
         :param t: The current training time step. This is used to control which search function and value
             estimator is used when generating the TD target values.
         :return: A dictionary of np.ndarrays of the same size as state_batch with state value estimates for
-            each state, the number of nodes evaluated, and the max depth of each search tree.
+            each state, the number of nodes evaluated, the max depth of each search tree, and the number of
+            tree nodes evaluated.
         """
         if isinstance(state_batch, str):  # Accept a lone string, convert it to a list of size 1
             state_batch = [state_batch, ]  # All lines below expect state_batch to be a list
@@ -569,15 +567,18 @@ class ChessAgent(DVN):
 
         # 4). Compute the TD targets sequentially using the search function
         state_values = np.zeros(len(state_batch), dtype=np.float32)  # 1 float state estimate per state
-        total_nodes = np.zerps(len(state_batch), dtype=np.int8)
-        max_depths = np.zerps(len(state_batch), dtype=np.int8)
+        total_nodes = np.zeros(len(state_batch), dtype=np.int32)
+        max_depths = np.zeros(len(state_batch), dtype=np.int32)
+        terminal_nodes = np.zeros(len(state_batch), dtype=np.int32)
         for i, state in enumerate(state_batch):
             _, state_value, _, info = search_func(state=state, model=v_network, **search_func_kwargs)
             state_values[i] = state_value
             total_nodes[i] = info[0]
             max_depths[i] = info[1]
+            terminal_nodes[i] = info[2]
 
-        return {"state_values": state_values, "total_nodes": total_nodes, "max_depths": max_depths}
+        return {"state_values": state_values, "total_nodes": total_nodes,
+                "max_depths": max_depths, "terminal_nodes": terminal_nodes}
 
     @staticmethod
     def _run_game(epsilon: float, config: Dict, *args, **kwargs) -> Tuple[List[str], Dict]:
