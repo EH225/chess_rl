@@ -47,6 +47,11 @@ def list_files():
     import os
     return os.listdir(os.getcwd())
 
+def worker_init():
+    import torch
+    torch.set_num_threads(4)
+    torch.set_num_interop_threads(4)
+
 
 #####################################
 ### Deep Value-Network Definition ###
@@ -277,7 +282,7 @@ class DVN:
         if self.config["model_training"]["local_cluster_only"] is False:  # To support other computing
             # resources, broadcast out the model weights to all dask workers to read from disk
             start_time = time.perf_counter()  # Track how long the full training iteration takes
-            self.dask_client.upload_file(os.path.join(save_dir, "model.bin"))
+            self.dask_client.upload_file(os.path.join(save_dir, "model_scripted.bin"))
             self.logger.info(f"\t   Model weights uploaded to dask workers ({runtime(start_time)})")
 
         # 2). Split the input state_batch into equal parts according to the number of threads in the cluster
@@ -332,6 +337,10 @@ class DVN:
         os.makedirs(save_dir, exist_ok=True)  # Make dir if needed
         if self.v_network is not None:  # If a v_network has been instantiated, save its weights
             torch.save(self.v_network.state_dict(), os.path.join(save_dir, "model.bin"))
+            self.v_network.eval()
+            scripted = torch.jit.script(self.v_network.model)
+            scripted.save(os.path.join(save_dir, "model_scripted.bin"))
+
         # Don't need to save the optimizer state here, we only will load in the model
         if self.config["model_training"]["local_cluster_only"] is False:  # To support other computing
             # resources, broadcast out the model weights to all dask workers to read from disk
@@ -422,8 +431,10 @@ class DVN:
         self.logger.info(f"Training model: {self.config['model']}")
         self.logger.info(f"Running model training on device: {self.device}")
 
-        local_cluster = LocalCluster(ip=get_lan_ip(), threads_per_worker=1, scheduler_port=8786,
-                                     local_directory=PARENT_DIR, n_workers=os.cpu_count())
+        local_cluster = LocalCluster(ip=get_lan_ip(), threads_per_worker=4, scheduler_port=8786,
+                                     local_directory=PARENT_DIR, n_workers=os.cpu_count() // 4,
+                                     processes=True,
+                                     preload=[os.path.join(PARENT_DIR, "utils/init_worker.py")])
         self.dask_client = Client(local_cluster)  # Create a scheduler and connect it with the local cluster
         self.dask_client.register_worker_callbacks(setup_path)  # Configure sys.path of all workers
         # For any other computer on the network, activate the chess_rl venv and then run to add resources:

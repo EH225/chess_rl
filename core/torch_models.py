@@ -535,8 +535,6 @@ class ChessAgent(DVN):
             each state, the number of nodes evaluated, the max depth of each search tree, and the number of
             tree nodes evaluated.
         """
-        torch.set_num_threads(1) # Prevent PyTorch multi-threading within a single thread
-        torch.set_num_interop_threads(1)
         if isinstance(state_batch, str):  # Accept a lone string, convert it to a list of size 1
             state_batch = [state_batch, ]  # All lines below expect state_batch to be a list
 
@@ -557,8 +555,10 @@ class ChessAgent(DVN):
                 wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model.bin")
                 v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
             else:  # Otherwise, read the model weights in from the local directory location
-                wts_path = os.path.join(config["model_training"]["load_dir"], "model.bin")
-                v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+                # wts_path = os.path.join(config["model_training"]["load_dir"], "model.bin")
+                # v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+                wts_path = os.path.join(config["model_training"]["load_dir"], "model_scripted.bin")
+                v_network.model = torch.jit.load(wts_path, map_location="cpu")
 
         # 3). Determine the search function specified by the config
         if t < config["pre_train"]["nsteps_pretrain"]:
@@ -594,8 +594,7 @@ class ChessAgent(DVN):
         :param config: A config dictionary read from yaml that specifies hyperparameters.
         :return: A list of game states (a list of FEN strings) and an ep_record summarizing the game.
         """
-        torch.set_num_threads(1) # Prevent PyTorch multi-threading within a single thread
-        torch.set_num_interop_threads(1)
+        # torch.set_num_interop_threads(1)
         # 1). Init the right kind of v_network model according to the config passed
         v_network = globals()[config["model_class"]](config)
 
@@ -608,8 +607,10 @@ class ChessAgent(DVN):
             wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model.bin")
             v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
         else:  # Otherwise, read the model weights in from the local directory location
-            wts_path = os.path.join(config["model_training"]["load_dir"], "model.bin")
-            v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+            # wts_path = os.path.join(config["model_training"]["load_dir"], "model.bin")
+            # v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+            wts_path = os.path.join(config["model_training"]["load_dir"], "model_scripted.bin")
+            v_network.model = torch.jit.load(wts_path, map_location="cpu")
 
         # 3). Create a chess env and prepare recording variables
         env = ChessEnv()

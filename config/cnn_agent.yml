@@ -13,7 +13,7 @@ output:
 
 search_func: # This defines kwargs that will be passed to the search function from core/search_algos.py
     name: "monte_carlo_tree_search"
-    batch_size: 32 # The batch_size used for generating state value estimates
+    batch_size: 128 # The batch_size used for generating state value estimates
     n_iters: 400 # The number of Monte Carlo tree search iterations to run
 
 pre_train: # Specify the number of pre-training steps and what search function to use
@@ -34,7 +34,7 @@ model_training:
     max_eval_moves: 250 # Set the max number of moves per eval self-play game
     compile: False # Whether to compile the model before training
     compile_mode: "default" # The compile mode to use if compile is True
-    local_cluster_only: True # Set to False to configure the cluster to be open to additional resources joining
+    local_cluster_only: False # Set to False to configure the cluster to be open to additional resources joining
 
 hyper_params:
     nsteps_train: 400 # The number of total training timesteps to run i.e. how many gradient updates to make
@@ -43,7 +43,7 @@ hyper_params:
     gamma: 1.00 # The temporal discount factor of future rewards
     learning_freq: 16 # How many on policy games to simulate between learning updates
     learning_updates: 4 # The number of learning update batches run each at each update interval 
-    warm_up: 16 # The number of games to run as a warm up before training actually begins
+    warm_up: 8 # The number of games to run as a warm up before training actually begins
     wt_decay: 0.00005 # Set an L2 regularization amount
 
     lr_begin: 0.0001 # The first value of the learning rate
