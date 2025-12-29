@@ -445,6 +445,8 @@ class DVN:
         # For any other computer on the network, activate the chess_rl venv and then run to add resources:
         #    dask-worker tcp://192.168.12.227:8786 --nthreads 11 --nworkers 16
         self.logger.info(f"Dask client scheduler address: {self.dask_client.scheduler.address}")
+        if self.config["model_training"]["local_cluster_only"] is False:
+            input("Pausing to let other computing resources join, press enter when ready to begin training: ")
 
         # 0). Check that the v_network and optimizer are initialized
         for x in ["v_network", "optimizer"]:

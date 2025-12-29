@@ -553,15 +553,16 @@ class ChessAgent(DVN):
                 worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
                 subfolders = set([x for x in os.listdir(worker_temp_dir)
                                   if os.path.isdir(os.path.join(worker_temp_dir, x))])
-                if config["model_training"]["use_scripted_model"]:
-                    wts_path = os.path.join(config["model_training"]["load_dir"], "model_scripted.bin")
-                    v_network.model = torch.jit.load(wts_path, map_location="cpu")
-                else:  # If not loading a pre-compiled model, then load in the state dictionary
-                    wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model.bin")
-                    v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+                wts_dir = os.path.join(worker_temp_dir, subfolders.pop())
             else:  # Otherwise, read the model weights in from the local weights save directory location
                 # i.e. 1 location, not the dask-worker space, no dask_client.upload_file used
-                wts_path = os.path.join(config["model_training"]["load_dir"], "model.bin")
+                wts_dir = config["model_training"]["load_dir"]
+
+            if config["model_training"]["use_scripted_model"]:
+                wts_path = os.path.join(wts_dir, "model_scripted.bin")
+                v_network.model = torch.jit.load(wts_path, map_location="cpu")
+            else:  # If not loading a pre-compiled model, then load in the state dictionary
+                wts_path = os.path.join(wts_dir, "model.bin")
                 v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
 
         # 3). Determine the search function specified by the config
@@ -608,15 +609,16 @@ class ChessAgent(DVN):
             worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
             subfolders = set([x for x in os.listdir(worker_temp_dir)
                               if os.path.isdir(os.path.join(worker_temp_dir, x))])
-            if config["model_training"]["use_scripted_model"]:
-                wts_path = os.path.join(config["model_training"]["load_dir"], "model_scripted.bin")
-                v_network.model = torch.jit.load(wts_path, map_location="cpu")
-            else:  # If not loading a pre-compiled model, then load in the state dictionary
-                wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model.bin")
-                v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+            wts_dir = os.path.join(worker_temp_dir, subfolders.pop())
         else:  # Otherwise, read the model weights in from the local weights save directory location
             # i.e. 1 location, not the dask-worker space, no dask_client.upload_file used
-            wts_path = os.path.join(config["model_training"]["load_dir"], "model.bin")
+            wts_dir = config["model_training"]["load_dir"]
+
+        if config["model_training"]["use_scripted_model"]:
+            wts_path = os.path.join(wts_dir, "model_scripted.bin")
+            v_network.model = torch.jit.load(wts_path, map_location="cpu")
+        else:  # If not loading a pre-compiled model, then load in the state dictionary
+            wts_path = os.path.join(wts_dir, "model.bin")
             v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
 
         # 3). Create a chess env and prepare recording variables
