@@ -534,6 +534,7 @@ class ChessAgent(DVN):
             each state, the number of nodes evaluated, the max depth of each search tree, and the number of
             tree nodes evaluated.
         """
+        torch.set_num_threads(1) # Prevent PyTorch multi-threading within a single thread
         if isinstance(state_batch, str):  # Accept a lone string, convert it to a list of size 1
             state_batch = [state_batch, ]  # All lines below expect state_batch to be a list
 
@@ -591,6 +592,7 @@ class ChessAgent(DVN):
         :param config: A config dictionary read from yaml that specifies hyperparameters.
         :return: A list of game states (a list of FEN strings) and an ep_record summarizing the game.
         """
+        torch.set_num_threads(1) # Prevent PyTorch multi-threading within a single thread
         # 1). Init the right kind of v_network model according to the config passed
         v_network = globals()[config["model_class"]](config)
 

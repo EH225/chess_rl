@@ -423,7 +423,7 @@ class DVN:
         self.logger.info(f"Running model training on device: {self.device}")
 
         local_cluster = LocalCluster(ip=get_lan_ip(), threads_per_worker=1, scheduler_port=8786,
-                                     local_directory=PARENT_DIR)
+                                     local_directory=PARENT_DIR, n_workers=os.cpu_count())
         self.dask_client = Client(local_cluster)  # Create a scheduler and connect it with the local cluster
         self.dask_client.register_worker_callbacks(setup_path)  # Configure sys.path of all workers
         # For any other computer on the network, activate the chess_rl venv and then run to add resources:
@@ -497,7 +497,7 @@ class DVN:
             states = self.run_games(n_games, exp_schedule.param, t)
             replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
             msg = (f"\t({runtime(start_time)}) {n_games} games and {len(states)} states generated with eps: "
-                   "{exp_schedule.param:.6f}")
+                   f"{exp_schedule.param:.6f}")
             self.logger.info(msg)
 
             # B). Perform training parameter update steps by sampling from the replay buffer
@@ -506,8 +506,8 @@ class DVN:
                 start_time = time.perf_counter()  # Measure how long each step takes
                 lr, beta = lr_schedule.param, beta_schedule.param
                 loss, grad_norm = self.update_step(replay_buffer, lr, beta, t)
-                msg = (f"\t({runtime(start_time)})Gradient update complete with lr: {lr:.6f}, beta: "
-                       "{beta:.4f}, loss: {loss:.4f}, grad_norm: {grad_norm:.4f}")
+                msg = (f"\t({runtime(start_time)}) Gradient update complete with lr: {lr:.6f}, beta: "
+                       f"{beta:.4f}, loss: {loss:.4f}, grad_norm: {grad_norm:.4f}")
                 self.logger.info(msg)
 
             # C). Periodically save the model weights and optimizer state during training
@@ -565,7 +565,7 @@ class DVN:
         start_time = time.perf_counter()  # Measure how long each step takes
         state_batch, wts, indices = replay_buffer.sample(batch_size, beta)
         msg = (f"\t   ({runtime(start_time)}) Sampled {len(wts)} obs from replay buffer, avg_wts: "
-               "{wts.mean():.3f}")
+               f"{wts.mean():.3f}")
         self.logger.info(msg)
 
         # [state_batch, wts, indices] -> (batch_size, ) lists of values
@@ -606,8 +606,8 @@ class DVN:
         corr = np.corrcoef(v_est_np_model, v_est_np)[0, 1]  # Compute the correlation of the ys and yhats
         self.logger.info(f"\t   y v_est: {summary_stats}")
         # Report metrics related to the outcome of the search functions
-        msg = (f"corr(y, y_hat): {corr:.2f}, avg_total_nodes: {total_nodes.mean():.1f}, avg_max_depth:"
-               " {max_depths.mean():.1f}, avg_terminal_nodes: {terminal_nodes.mean()}")
+        msg = (f"\t   corr(y, y_hat): {corr:.2f}, avg_total_nodes: {total_nodes.mean():.1f}, avg_max_depth:"
+               f" {max_depths.mean():.1f}, avg_terminal_nodes: {terminal_nodes.mean():.1f}")
         self.logger.info(msg)
 
         # 6). Compute gradients wrt to the MSE Loss function
