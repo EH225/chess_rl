@@ -20,6 +20,7 @@ import core.search_algos as search_algos
 from utils.chess_env import ChessEnv, create_ep_record, relative_material_diff
 from typing import Tuple, List, Dict
 
+torch.backends.mkldnn.enabled = True # Usually enabled, but set to be sure
 
 ##################################################
 ### Pre-Training Material Heuristic Definition ###
@@ -535,6 +536,7 @@ class ChessAgent(DVN):
             tree nodes evaluated.
         """
         torch.set_num_threads(1) # Prevent PyTorch multi-threading within a single thread
+        torch.set_num_interop_threads(1)
         if isinstance(state_batch, str):  # Accept a lone string, convert it to a list of size 1
             state_batch = [state_batch, ]  # All lines below expect state_batch to be a list
 
@@ -593,6 +595,7 @@ class ChessAgent(DVN):
         :return: A list of game states (a list of FEN strings) and an ep_record summarizing the game.
         """
         torch.set_num_threads(1) # Prevent PyTorch multi-threading within a single thread
+        torch.set_num_interop_threads(1)
         # 1). Init the right kind of v_network model according to the config passed
         v_network = globals()[config["model_class"]](config)
 

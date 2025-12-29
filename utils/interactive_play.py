@@ -6,9 +6,8 @@ sys.path.insert(0, PARENT_DIR)
 
 import chess
 from utils.general import read_yaml
-from utils.chess_env import ChessEnv
 from core.torch_models import ChessAgent
-from IPython.display import display, clear_output
+from IPython.display import display
 
 
 def interactive_match(config_name: str, player_color: str = "white", state: str = None) -> None:

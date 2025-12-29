@@ -320,7 +320,8 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
             # Check for alpha-beta pruning conditions. If met, then no further searching is needed along this
             # branch, stop further child node evaluation and update the parent of this node
 
-            if node.maximize is True and node.alpha > node.beta:
+            if node.maximize is True and node.alpha > node.beta:  # Must be a strict inequality so that
+                # the best move at the root can be correctly identified
                 # node.value is the game score the maximizer can guarantee from pathways beyond this current
                 # node. The maximizer will select the highest value among the children. Therefore, the current
                 # value of node.value is a lower bound as to what the maximizer will select. beta tells us
@@ -331,7 +332,8 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
                 # as fully-expanded, no need to call update since leaf nodes already updated
                 node.children_pruned = True  # Set a flag if pruning was done
 
-            elif node.maximize is False and node.beta < node.alpha:
+            elif node.maximize is False and node.beta < node.alpha:  # Must be a strict inequality so that
+                # the best move at the root can be correctly identified
                 # node.value is the game score the minimizer can guarantee from pathways beyond this current
                 # node. The minimizer will select the lowest value among the children. Therefore, the current
                 # value of node.value is an upper bound as to what the minimizer will select. alpha tells us

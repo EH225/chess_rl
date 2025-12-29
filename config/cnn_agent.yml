@@ -37,7 +37,7 @@ model_training:
     local_cluster_only: True # Set to False to configure the cluster to be open to additional resources joining
 
 hyper_params:
-    nsteps_train: 350 # The number of total training timesteps to run i.e. how many gradient updates to make
+    nsteps_train: 400 # The number of total training timesteps to run i.e. how many gradient updates to make
     batch_size: 512 # The batch size when sampling training examples from the replay buffer
     buffer_size: 750000 # The frame capacity of the replay buffer
     gamma: 1.00 # The temporal discount factor of future rewards
