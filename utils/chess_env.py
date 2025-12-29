@@ -54,20 +54,18 @@ def material_diff(state: str) -> float:
 
 
 def relative_material_diff(state: str) -> float:
-    """ ## TODO This needs updating
-    Computes the net relative material difference of the current board state from the perpsective of the
-    player who is to move next where each piece is worth:
+    """
+    Computes a heuristic estimate of the game outcome [-1, +1] using the relative material difference from
+    the perspective of the player who is to go next where the value of each piece is:
         pawn (0.125), knight (3), bishop (3), rook (5), queen (10), king (0)
 
     The relative material difference is defined as:
-        (player material) - (opponent material)
+        (player material) / (total material) * 2 - 1 -> maps to a value [-1, +1]
 
-    This net material difference is then normalized by min(total_material / 2, 10) where we cap the
-    denominator scaling by 10 so that being up a queen or 2 rooks is almost certainly going to win the
-    game. If the current player is in check, then subtract 0.1 from the score for them, being in check is
-    a vulnerable position and restricts the moves of the player moving next, therefore it should decrease
-    the overall expected reward for the perspective of the player to move next. Final values are clipped
-    at [-1, +1] after this check penality is added.
+    If the current player to move is in check, an additional -0.1 penalty is added to discentivize being in
+    check. Check is a vulnerable position and restricts the moves of the player moving next. This heuristic
+    function also return -1 or 0 if the game is at a terminal state (was checkmated or reached a draw). All
+    values returned are clipped to [-1, +1]
 
     :param state: A FEN string denoting the current game state.
     :return: A float value estimate of the game outcome based on relative material.
@@ -86,10 +84,6 @@ def relative_material_diff(state: str) -> float:
             player_material += piece_val
         total_material += piece_val
 
-    # net_material = player_material - (total_material - player_material)
-    # denom = min(total_material / 2, 10)  # Scaling context for the net_material diff, set it to be half
-    # the total material on the board or at most 20 i.e. being up a queen is 90% going to result in you
-    # winning the game
     return np.clip((player_material / total_material) * 2 - 1 + (-0.1 if board.is_check() else 0), -1, 1)
 
 

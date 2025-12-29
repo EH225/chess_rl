@@ -258,6 +258,33 @@ class DVN:
         best_action, state_value, action_values = self.get_best_action(board.fen())
         return list(board.legal_moves)[best_action]
 
+    def distribute_model_weights(self) -> None:
+        """
+        This method is called before dask operations are run, i.e. before run_games and compute_td_targets to
+        save and distribute the most up-to-date model weights for reading from disk by the dask workers:
+            A). Save the current model weights to disk
+            B). Save a scripted version if use_scripted_model is True
+            C). Broadcast weights to the workers if local_cluster_only is False
+        """
+        save_dir = self.config["output"]["model_output"]
+        os.makedirs(save_dir, exist_ok=True)  # Make dir if needed
+        assert self.v_network is not None, "v_network must be instantiated before its weights can be saved"
+        torch.save(self.v_network.state_dict(), os.path.join(save_dir, "model.bin"))  # Save the current wts
+        if self.config["model_training"]["use_scripted_model"]: # If using a scripted model, also save that
+            self.v_network.eval()
+            scripted = torch.jit.script(self.v_network.model)
+            scripted.save(os.path.join(save_dir, "model_scripted.bin"))
+            upload_model_name = "model_scripted.bin"
+        else:
+            upload_model_name = "model.bin"
+
+        # Don't need to save the optimizer state here, we only will load in the model
+        if self.config["model_training"]["local_cluster_only"] is False:  # To support other computing
+            # resources, broadcast out the model weights to all dask workers to read from disk
+            start_time = time.perf_counter()  # Track how long the upload process takes
+            self.dask_client.upload_file(os.path.join(save_dir, upload_model_name))
+            self.logger.info(f"\t   Model weights uploaded to dask workers ({runtime(start_time)})")
+
     def compute_td_targets(self, state_batch: List[str], t: int) -> Tuple[np.ndarray]:
         """
         This method is used to compute the TD targets in parallel using dask which are used during training
@@ -273,17 +300,8 @@ class DVN:
             value from each derived from the v_network model and search function along with the total nodes
             evaluated and the max depth of each seach tree.
         """
-        # 1). Save the current model weights so that they can be read from disk by each dask worker
-        save_dir = self.config["output"]["model_output"]
-        os.makedirs(save_dir, exist_ok=True)  # Make dir if needed
-        if self.v_network is not None:  # If a v_network has been instantiated, save its weights
-            torch.save(self.v_network.state_dict(), os.path.join(save_dir, "model.bin"))
-        # Don't need to save the optimizer state here, we only will load in the model
-        if self.config["model_training"]["local_cluster_only"] is False:  # To support other computing
-            # resources, broadcast out the model weights to all dask workers to read from disk
-            start_time = time.perf_counter()  # Track how long the full training iteration takes
-            self.dask_client.upload_file(os.path.join(save_dir, "model_scripted.bin"))
-            self.logger.info(f"\t   Model weights uploaded to dask workers ({runtime(start_time)})")
+        # 1). Save the current model weights and distribute so they are accessible to all dask workers
+        self.distribute_model_weights()
 
         # 2). Split the input state_batch into equal parts according to the number of threads in the cluster
         nthreads = self.dask_client.scheduler_info()["total_threads"]
@@ -332,21 +350,8 @@ class DVN:
         :param epsilon: The exploration parameter i.e. with probability e the agent selects a random action.
         :return: A list of FEN strings encodings of all the board states reached during the n_games.
         """
-        # 1). Save the current model weights so that they can be read from disk by each dask worker
-        save_dir = self.config["output"]["model_output"]
-        os.makedirs(save_dir, exist_ok=True)  # Make dir if needed
-        if self.v_network is not None:  # If a v_network has been instantiated, save its weights
-            torch.save(self.v_network.state_dict(), os.path.join(save_dir, "model.bin"))
-            self.v_network.eval()
-            scripted = torch.jit.script(self.v_network.model)
-            scripted.save(os.path.join(save_dir, "model_scripted.bin"))
-
-        # Don't need to save the optimizer state here, we only will load in the model
-        if self.config["model_training"]["local_cluster_only"] is False:  # To support other computing
-            # resources, broadcast out the model weights to all dask workers to read from disk
-            start_time = time.perf_counter()  # Track how long the full training iteration takes
-            self.dask_client.upload_file(os.path.join(save_dir, "model.bin"))
-            self.logger.info(f"\t   Model weights uploaded to dask workers ({runtime(start_time)})")
+        # 1). Save the current model weights and distribute so they are accessible to all dask workers
+        self.distribute_model_weights()
 
         # 2). Run the games in parallel and aggregate the results from each
         # In order to get different results from each _run_game call, we have to differentiate the input so

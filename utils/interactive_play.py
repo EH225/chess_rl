@@ -72,4 +72,4 @@ def interactive_match(config_name: str, player_color: str = "white", state: str 
 
 
 if __name__ == "__main__":
-    interactive_match("heuristic_agent", "white")
+    interactive_match("cnn_agent", "white")
