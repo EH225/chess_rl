@@ -319,6 +319,7 @@ class DVN:
             max_depths.append(res["max_depths"])
             terminal_nodes.append(res["terminal_nodes"])
 
+        self.dask_client.cancel(futures)  # Explicitly clean up the futures tasks, drop from memory
         return (np.concatenate(state_values), np.concatenate(total_nodes),
                 np.concatenate(max_depths), np.concatenate(terminal_nodes))
 
@@ -365,6 +366,7 @@ class DVN:
             ep_records.append(ep_record)
             all_states.extend(states)
 
+        self.dask_client.cancel(futures)  # Explicitly clean up the futures tasks, drop from memory
         self.update_ep_history(ep_records, "train")  # Log all the training episodes in the csv log
         return all_states
 
