@@ -20,7 +20,8 @@ import core.search_algos as search_algos
 from utils.chess_env import ChessEnv, create_ep_record, relative_material_diff
 from typing import Tuple, List, Dict
 
-torch.backends.mkldnn.enabled = True # Usually enabled, but set to be sure
+torch.backends.mkldnn.enabled = True  # Usually enabled, but set to be sure
+
 
 ##################################################
 ### Pre-Training Material Heuristic Definition ###
@@ -31,7 +32,7 @@ class MaterialHeuristic(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__()
         self.device = "cpu"  # Alwys run on the CPU
-        self.pos_embeddings = nn.Parameter(torch.zeros(1)) # Needs a parameter for the optimizer init
+        self.pos_embeddings = nn.Parameter(torch.zeros(1))  # Needs a parameter for the optimizer init
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """

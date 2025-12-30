@@ -245,6 +245,7 @@ class Node_MMS:
     def __repr__(self) -> str:
         return self.state
 
+
 def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, horizon: int = 3, **kwargs
                    ) -> Tuple[int, float, np.ndarray, Tuple[int]]:
     """
@@ -371,9 +372,9 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
             for node, value in zip(eval_batch, value_batch):  # Update the tree with these value estimates
                 # Record the value approximation of this node and deal with sign flipping to make the value
                 # estimate from the perspective of the root node (a maximizer node)
-                value *= (1 if node.maximize else -1) # Flip the sign if the opponent is to move next
+                value *= (1 if node.maximize else -1)  # Flip the sign if the opponent is to move next
                 cache[node.state_] = value  # Add this value to the cache once computed
-                node.value = value # Set as the node's value once obtained
+                node.value = value  # Set as the node's value once obtained
                 node.update_tree()  # Once populated, backup the update throughout the tree
 
             eval_batch = []  # Once this batch is finished, clear out the buffer for the next batch of nodes
@@ -596,7 +597,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
     """
     cache = {}  # Cache the values output from the model, if we send it the same state 2x re-use prior values
     terminal_nodes = 0  # Count how many of the nodes reached were terminal
-    nodes_expanded = 0 # Count how many total nodes are expanded during MCTS
+    nodes_expanded = 0  # Count how many total nodes are expanded during MCTS
     root = Node_MCTS(state=state, parent=None)  # Create a search tree root node
     if root.is_terminal:  # If the input state is a terminal state, no searching required, board value known
         return 9999, root.terminal_reward, np.zeros(0), (1, 0, 1)
@@ -679,7 +680,6 @@ if __name__ == "__main__":
     state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/8/5N1P/2PPPqP1/RNBQKB1R w KQkq - 0 6'  # Checkmate
     board = chess.Board(state)
     dummy_model = lambda x: torch.rand(len(x)) * 2 - 1  # TEMP sample model, fill in for a value approximator
-
 
     ## Test the Naive Search algo
     # best_action, state_value, action_values = naive_search(state, dummy_model)

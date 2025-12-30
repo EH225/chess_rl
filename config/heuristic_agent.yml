@@ -1,0 +1,62 @@
+# This config file runs the CNN-based RL chess agent model with final training parameters
+model: "Heuristic_Agent" # Name of the model being trained, determines the output directory name
+model_class: "MaterialHeuristic" # Should match one of the model classes in core/torch_models.py
+
+output:
+    output_path: &output_path "results/Heuristic_Agent/" # Directory of training results
+    model_output: !join_path [*output_path, "saved_weights/"] # Location of saved model weights
+    log_path: !join_path [*output_path, "log.txt"] # Location of training log
+    plot_output: *output_path # Location of eval scores during training summary plot and csv data
+    record_path: !join_path [*output_path, "recordings/"] # Location of where to save episode recordings
+    tensorboard: !join_path [*output_path, "tensorboard/"] # Location to save tensorboard log files
+    clear_all: False # If set to True, then the output_path is cleared at the start, deletes existing results
+
+search_func: # This defines kwargs that will be passed to the search function from core/search_algos.py
+    name: "minimax_search"
+    batch_size: 32 # The batch_size used for generating state value estimates
+    gamma: 1.0
+    horizon: 2 # The number of forward moves ahead to simulate in the search minimax tree
+
+pre_train: # Specify the number of pre-training steps and what search function to use
+    nsteps_pretrain: 400 # The number of the full nsteps_train to run in pre-training mode
+    name: "minimax_search" # The simple search function used for pre-training
+    gamma: 1.0 # Temporal discount factor, for chess we set it to 1.0
+    batch_size: 64 # The batch size for leaf eval in the search function
+    horizon: 2 # The number of forward moves ahead to simulate in the search minimax tree
+
+model_training:
+    record: True # Record the last eval episode in each eval run
+    seed: 2025 # Set a random seed for usage in the replay buffer
+    load_dir: !join_path [*output_path, "saved_weights/"] # Location to look for pre-trained saved weights
+    num_episodes_test: 1 # The number of episodes to run for each periodic evaluation step
+    clip_val: 2.0 # The norm of the gradient vector used in grad clipping
+    saving_freq: 10 # The frequency of saving model weights measured in training timesteps
+    eval_freq: 50 # The frequency of evaluation runs measured in training timesteps
+    max_eval_moves: 250 # Set the max number of moves per eval self-play game
+    compile: False # Whether to compile the model before training
+    compile_mode: "default" # The compile mode to use if compile is True
+    local_cluster_only: True # Set to False to configure the cluster to be open to additional resources joining
+
+hyper_params:
+    nsteps_train: 1000 # The number of total training timesteps to run i.e. how many gradient updates to make
+    batch_size: 512 # The batch size when sampling training examples from the replay buffer
+    buffer_size: 750000 # The frame capacity of the replay buffer
+    gamma: 1.00 # The temporal discount factor of future rewards
+    learning_freq: 16 # How many on policy games to simulate between learning updates
+    learning_updates: 4 # The number of learning update batches run each at each update interval 
+    warm_up: 16 # The number of games to run as a warm up before training actually begins
+    wt_decay: 0.00005 # Set an L2 regularization amount
+
+    lr_begin: 0.0001 # The first value of the learning rate
+    lr_end: 0.00001 # The final value of the learning rate
+    lr_nsteps: 750 # The number of steps over which the learning rate is decayed
+    
+    eps_begin: 1.0 # The first value of the epsilon exploration probability
+    eps_end: 0.01 # The final value of the epsilon exploration probability
+    eps_nsteps: 750 # The number of steps over which the epsilon exploration probability is decayed
+    
+    eps: 1e-5 # The min priority value given to every transition for priorty sampling
+    alpha: 0.6 # Controls the degree of prioritizing higher TD errors, alpha == 0 creates uniform sampling
+    beta_begin: 0.4 # The first value of beta used in importance sampling
+    beta_end: 1.0 # The final value of beta used in importance sampling
+    beta_nsteps: 750 # The number of steps over which the beta for importance sampling is increased

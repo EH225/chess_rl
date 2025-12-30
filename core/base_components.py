@@ -47,6 +47,7 @@ def list_files():
     import os
     return os.listdir(os.getcwd())
 
+
 def worker_init():
     import torch
     torch.set_num_threads(4)
@@ -161,7 +162,7 @@ class DVN:
         # 3). Now that we have the model and weights initialized, move them to the appropriate device
         self.v_network = self.v_network.to(self.device)
         self.v_network.device = self.device  # Update the device of the model after moving it
-        self.v_network.eval() # Set the model to eval mode unless training is being done
+        self.v_network.eval()  # Set the model to eval mode unless training is being done
 
         trainable_params = sum(p.numel() for p in self.v_network.parameters() if p.requires_grad)
         self.logger.info(f"Total Trainable Parameters: {trainable_params}")
@@ -270,7 +271,7 @@ class DVN:
         os.makedirs(save_dir, exist_ok=True)  # Make dir if needed
         assert self.v_network is not None, "v_network must be instantiated before its weights can be saved"
         torch.save(self.v_network.state_dict(), os.path.join(save_dir, "model.bin"))  # Save the current wts
-        if self.config["model_training"]["use_scripted_model"]: # If using a scripted model, also save that
+        if self.config["model_training"]["use_scripted_model"]:  # If using a scripted model, also save that
             self.v_network.eval()
             scripted = torch.jit.script(self.v_network.model)
             scripted.save(os.path.join(save_dir, "model_scripted.bin"))
@@ -283,7 +284,7 @@ class DVN:
             # resources, broadcast out the model weights to all dask workers to read from disk
             start_time = time.perf_counter()  # Track how long the upload process takes
             self.dask_client.upload_file(os.path.join(save_dir, upload_model_name))
-            self.logger.info(f"\t   Model weights uploaded to dask workers ({runtime(start_time)})")
+            self.logger.info(f"\t   ({runtime(start_time)}) Model weights uploaded to dask workers")
 
     def compute_td_targets(self, state_batch: List[str], t: int) -> Tuple[np.ndarray]:
         """
@@ -438,8 +439,8 @@ class DVN:
 
         local_cluster = LocalCluster(ip=get_lan_ip(), threads_per_worker=4, scheduler_port=8786,
                                      local_directory=PARENT_DIR, n_workers=os.cpu_count() // 4,
-                                     processes=True,
-                                     preload=[os.path.join(PARENT_DIR, "utils/init_worker.py")])
+                                     processes=True)
+        # preload=[os.path.join(PARENT_DIR, "utils/init_worker.py")])
         self.dask_client = Client(local_cluster)  # Create a scheduler and connect it with the local cluster
         self.dask_client.register_worker_callbacks(setup_path)  # Configure sys.path of all workers
         # For any other computer on the network, activate the chess_rl venv and then run to add resources:
@@ -599,16 +600,16 @@ class DVN:
         # i.e. what the v_network estimates is the discounted future return of following an optimal policy
         # from each state as the initial starting state
         start_time = time.perf_counter()  # Measure how long each step takes
-        self.v_network.train() # Set to train mode before generating gradient tracked predictions
+        self.v_network.train()  # Set to train mode before generating gradient tracked predictions
         with torch.autocast(device_type=self.device, dtype=torch.bfloat16):  # Use BFloat16
             v_est = self.v_network(state_batch).reshape(-1)  # Returns a torch.Tensor on self.device
-        self.logger.info(f"\t   {len(v_est)} y-hat state value estimates generated ({runtime(start_time)})")
+        self.logger.info(f"\t   ({runtime(start_time)}) {len(v_est)} y-hat state value estimates generated")
         v_est_np = v_est.detach().to(torch.float32).cpu().numpy()  # Convert over to numpy for reporting
         summary_stats = [f"{x:.2f}" for x in [v_est_np.max(), v_est_np.min(), v_est_np.mean(),
                                               np.abs(v_est_np).mean(), v_est_np.std()]]
         summary_stats = "(max, min, mean, abs mean, std) = (" + ", ".join(summary_stats) + ")"
         self.logger.info(f"\t   y-hat v_est: {summary_stats}")
-        self.v_network.eval() # Re-set back to eval mode for all other calculations
+        self.v_network.eval()  # Re-set back to eval mode for all other calculations
         v_est_np_model = v_est_np  # Save the alias
 
         # 5). Compute the TD target values using a search function to get more accurate values by looking
