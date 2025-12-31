@@ -282,7 +282,7 @@ class DVN:
         if self.config["model_training"]["local_cluster_only"] is False:  # To support other computing
             # resources, broadcast out the model weights to all dask workers to read from disk
             start_time = time.perf_counter()  # Track how long the upload process takes
-            self.model_weights_dask.set(self.v_network.state_dict())  # Update the distributed wts var
+            self.model_weights_dask.set(self.v_network.model.state_dict())  # Update the distributed wts var
             if self.config["model_training"]["use_scripted_model"]:  # If using a scripted model with multiple
                 # computers, then distribute the scripted model 1x to all the workers, will still load in the
                 # model weights from the state dict each time, but is needed for the model structure

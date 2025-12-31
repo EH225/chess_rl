@@ -715,6 +715,6 @@ def _load_worker_model(config: Dict) -> nn.Module:
             v_network.model = torch.jit.load(wts_path, map_location="cpu")  # Load in the model
             v_network.model.load_state_dict(model_weights)  # Load in the weights to the model
         else:  # THe model is already initialized, just load in the weights
-            v_network.load_state_dict(model_weights)
+            v_network.model.load_state_dict(model_weights)
 
     return v_network

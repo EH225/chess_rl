@@ -24,8 +24,8 @@ pre_train: # Specify the number of pre-training steps and what search function t
     horizon: 2 # The number of forward moves ahead to simulate in the search minimax tree
 
 cluster:
-    n_workers: 4
-    threads_per_worker: 4
+    n_workers: 5
+    threads_per_worker: 3
     scheduler_port: 8786
 
 model_training:
@@ -41,7 +41,7 @@ model_training:
     compile: False # Whether to compile the model before training
     compile_mode: "default" # The compile mode to use if compile is True
     local_cluster_only: False # Set to False to configure the cluster to be open to additional resources joining
-    use_scripted_model: True # If set to True, then the scripted version of the model is used instead
+    use_scripted_model: False # If set to True, then the scripted version of the model is used instead
 
 hyper_params:
     nsteps_train: 400 # The number of total training timesteps to run i.e. how many gradient updates to make
