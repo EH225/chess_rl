@@ -564,7 +564,6 @@ class ChessAgent(DVN):
         return {"state_values": state_values, "total_nodes": total_nodes,
                 "max_depths": max_depths, "terminal_nodes": terminal_nodes}
 
-
     @staticmethod
     def _generate_states(ep_record: Dict, n_steps: int, epsilon: float, config: Dict,
                          *args, **kwargs) -> Tuple[List[str], List[Dict], Dict]:
@@ -610,14 +609,14 @@ class ChessAgent(DVN):
                 # Record the ep_record of the game played in the list of completed ep_records
                 completed_ep_record = create_ep_record(env.board.move_stack)  # Summarize moves made here
                 # Merge info about the new moves played here with the info about the game from where it began
-                for key, val in ep_record:
+                for key, val in ep_record.items():
                     if key not in ["episode_id", "outcome", "winner", "end_state"]:
                         completed_ep_record[key] += val
                 completed_ep_records.append(completed_ep_record)  # Collect all completed episode records
-                ep_record = create_ep_record([]) # Create a new ep_record for an initial board to play again
+                ep_record = create_ep_record([])  # Create a new ep_record for an initial board to play again
                 state = env.reset()  # Reset the env and generate the starting board state
 
-            else: # If the game has not yet ended, then take an action and continue self-play
+            else:  # If the game has not yet ended, then take an action and continue self-play
                 if np.random.rand() < epsilon:  # With probability epsilon, choose a random action
                     action, state_value, action_values = env.action_space.sample(), 0, np.zeros(0)
                 else:  # Otherwise actually use the model to evaluate
@@ -631,7 +630,7 @@ class ChessAgent(DVN):
         # At the end, combine the info from any moves made here with the starting ep_record
         final_ep_record = create_ep_record(env.board.move_stack)  # Summarize moves made here
         # Merge info about the new moves played here with the info about the game from where it began
-        for key, val in ep_record:
+        for key, val in ep_record.items():
             if key not in ["episode_id", "outcome", "winner", "end_state"]:
                 final_ep_record[key] += val
 
@@ -680,6 +679,7 @@ class ChessAgent(DVN):
         ep_record = create_ep_record(env.board.move_stack)
 
         return states, ep_record
+
 
 def _load_worker_model(config: Dict) -> nn.Module:
     """

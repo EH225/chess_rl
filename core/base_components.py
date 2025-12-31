@@ -359,7 +359,7 @@ class DVN:
         # 2). Look for episode records if it exists, we will continue simulating from where we last left off
         # otherwise create a series of new ep_records for a new set of games
         nthreads = self.dask_client.scheduler_info()["total_threads"]  # How many threads are available to use
-        if not hasattr(self, "ep_records"): # If this property doesn't yet exist, then this is the first time
+        if not hasattr(self, "ep_records"):  # If this property doesn't yet exist, then this is the first time
             # the run_games method is being called, create it to track the progress of each game simulated
             self.ep_records = [create_ep_record([]) for i in range(nthreads)]
 
@@ -371,7 +371,7 @@ class DVN:
             while len(self.ep_records) > nthreads:
                 removals.append(self.ep_records.pop())
             self.update_ep_history(removals, "train")  # Log all the training episodes in the csv log
-        elif len(self.ep_records) < nthreads: # If there are more threads than before, add more ep_records
+        elif len(self.ep_records) < nthreads:  # If there are more threads than before, add more ep_records
             self.ep_records += [create_ep_record([]) for i in range(nthreads - len(self.ep_records))]
 
         # 4). Continue running the games in parallel to generate at least n_steps new game states
@@ -379,7 +379,7 @@ class DVN:
         # In order to get different results from each _run_game call, we have to differentiate the input so
         # we pass in i, the int counter which has no effect on the simulated games themselves
         futures = [self.dask_client.submit(self._generate_states, ep_record, steps, epsilon, self.config, i)
-                   for i , ep_record in enumerate(self.ep_records)]
+                   for i, ep_record in enumerate(self.ep_records)]
         finished_ep_records = []  # Collect all the training episodes which have fully completed
         unfinished_ep_records = []  # Collect the nthread training episodes which have not fully finished
         all_states = []  # Aggregate all the on-policy states generated from all the games (n_steps)
@@ -389,7 +389,7 @@ class DVN:
             unfinished_ep_records.append(ep_rec)  # Append where the ep_record of the last step
 
         self.dask_client.cancel(futures)  # Explicitly clean up the futures tasks, drop from memory
-        self.ep_records = unfinished_ep_records # Update to pick up from where we left off next call
+        self.ep_records = unfinished_ep_records  # Update to pick up from where we left off next call
         for ep_record in finished_ep_records:
             ep_record["t"] = t
         self.update_ep_history(finished_ep_records, "train")  # Log all the training episodes in the csv log
@@ -589,7 +589,7 @@ class DVN:
             iter_start = time.perf_counter()  # Track how long the full training iteration takes
             # A). Play a series of on-policy games in parallel using dask to generate new states
             start_time = time.perf_counter()  # Measure how long each step takes as well
-            n_steps = self.config["hyper_params"]["learning_freq"] # The number of new game states to create
+            n_steps = self.config["hyper_params"]["learning_freq"]  # The number of new game states to create
             # states = self.run_games(n_games, exp_schedule.param, t)
             states = self.generate_states(n_steps, exp_schedule.param, t)
             replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
