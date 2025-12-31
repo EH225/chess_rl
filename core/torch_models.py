@@ -566,7 +566,7 @@ class ChessAgent(DVN):
 
 
     @staticmethod
-    def _generate_states(self, ep_record: Dict, n_steps: int, epsilon: float, config: Dict,
+    def _generate_states(ep_record: Dict, n_steps: int, epsilon: float, config: Dict,
                          *args, **kwargs) -> Tuple[List[str], List[Dict], Dict]:
         """
         Runs a continuation of the episode denoted in ep_record for a specified number of steps using an
@@ -680,7 +680,6 @@ class ChessAgent(DVN):
         ep_record = create_ep_record(env.board.move_stack)
 
         return states, ep_record
-
 
 def _load_worker_model(config: Dict) -> nn.Module:
     """
