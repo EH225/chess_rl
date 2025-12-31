@@ -78,6 +78,19 @@ def runtime(start_time: float) -> str:
     return f"{time.perf_counter() - start_time:.1f}s"
 
 
+def convert_seconds(seconds: float) -> str:
+    """
+    Converts an input number of total seconds into a [x]h [y]m [z]s time string.
+
+    :param seconds: The number of total seconds as an input.
+    :return: The total seconds input converted to [x]h [y]m [z]s format.
+    """
+    hours = seconds // 3600  # Get the number of hours
+    minutes = (seconds % 3600) // 60  # Get the number of minutes
+    seconds = seconds % 60  # Get the remaining seconds
+    return f"{hours}h {minutes}m {seconds}s"
+
+
 class LinearSchedule:
     """
     Sets a linear schedule for the linear evolution of a given parameter over time e.g. learning rate,

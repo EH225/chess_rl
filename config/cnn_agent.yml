@@ -13,11 +13,11 @@ output:
 
 search_func: # This defines kwargs that will be passed to the search function from core/search_algos.py
     name: "monte_carlo_tree_search"
-    batch_size: 128 # The batch_size used for generating state value estimates
-    n_iters: 400 # The number of Monte Carlo tree search iterations to run
+    batch_size: 32 # The batch_size used for generating state value estimates
+    n_iters: 128 # The number of Monte Carlo tree search iterations to run
 
 pre_train: # Specify the number of pre-training steps and what search function to use
-    nsteps_pretrain: 150 # The number of the full nsteps_train to run in pre-training mode
+    nsteps_pretrain: 200 # The number of the full nsteps_train to run in pre-training mode
     name: "minimax_search" # The simple search function used for pre-training
     gamma: 1.0 # Temporal discount factor, for chess we set it to 1.0
     batch_size: 64 # The batch size for leaf eval in the search function

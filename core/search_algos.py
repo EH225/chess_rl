@@ -156,7 +156,8 @@ def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **
 
     # Determine the best action and the highest value by computing the argmax and max
     action_values = np.array(action_values)
-    best_action, state_value = action_values.argmax(), action_values.max()
+    state_value = action_values.max()  # Find the max value among the action values as the overall state value
+    best_action = np.random.choice(np.where(action_values == state_value)[0])  # Randomly select from argmaxes
     return best_action, state_value, action_values, (1, len(action_values) + 1, terminal_nodes)
 
 
@@ -381,7 +382,8 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
 
     # Once finished with the search process, extract the best action, overall state est, and action values
     action_values = np.array([child.reward + child.value * gamma for child in root.children])
-    best_action, state_value = action_values.argmax(), action_values.max()
+    state_value = action_values.max()  # Find the max value among the action values as the overall state value
+    best_action = np.random.choice(np.where(action_values == state_value)[0])  # Randomly select from argmaxes
     return best_action, state_value, action_values, (count_total_nodes(root), max_depth(root), terminal_nodes)
 
 
@@ -665,7 +667,8 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
 
     # Now that we have populated the MC tree, identify the best action and the estimated state value
     action_values = np.array([node.Q() for node in root.children])
-    best_action, state_value = action_values.argmax(), action_values.max()
+    state_value = action_values.max()  # Find the max value among the action values as the overall state value
+    best_action = np.random.choice(np.where(action_values == state_value)[0])  # Randomly select from argmaxes
     return best_action, state_value, action_values, (nodes_expanded, max_depth(root), terminal_nodes)
 
 

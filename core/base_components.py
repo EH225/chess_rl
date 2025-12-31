@@ -24,7 +24,7 @@ import torch
 import torch.nn as nn
 
 from torch.utils.tensorboard import SummaryWriter
-from utils.general import get_logger, runtime, LinearSchedule, get_lan_ip
+from utils.general import get_logger, runtime, convert_seconds, LinearSchedule, get_lan_ip
 from utils.replay_buffer import ReplayBuffer
 from utils.chess_env import ChessEnv, save_recording, save_move_stack, create_ep_record, move_stack_to_states
 from utils.evaluate import evaluate_agent_game
@@ -639,7 +639,12 @@ class DVN:
                 msg = f"\t({runtime(start_time)}) {n_ep} eval episode(s) run with score: {score:.1f}"
                 self.logger.info(msg)
 
-            self.logger.info(f"({runtime(iter_start)}) Full training iteration complete")
+            # Report how long this iteration took to run and also how long the rest are estimated to take
+            iter_runtime = iter_start - time.perf_counter()
+            n_iters_left = self.config["hyper_params"]["nsteps_train"] - 1 - t
+            end_est = convert_seconds(n_iters_left * iter_runtime)
+            msg = f"({runtime(iter_start)}) Full training iteration complete, est time left: {end_est}"
+            self.logger.info(msg)
             t += 1  # Increment the global training step counter after completing another training iteration
 
         # 7). Final screen updates and eval run at the end of training
@@ -765,7 +770,9 @@ class DVN:
                 ep_losses, move_stack = evaluate_agent_game(self.agent_move_func, max_moves=max_moves,
                                                             return_move_stack=True)
                 all_losses.extend(ep_losses)  # Aggregate the losses over all moves and all games
-                self.update_ep_history([create_ep_record(move_stack)], prefix="eval")  # Record game summary
+                ep_record = create_ep_record(move_stack)  # Summarize the eval game as an ep_record
+                ep_record["eval_score"] = sum(ep_losses) / len(ep_losses)  # Record the eval score
+                self.update_ep_history([ep_record], prefix="eval")  # Record game summary in the eval ep csv
                 if verbose is True:
                     msg = f"Game {g + 1}: ACPL = {sum(ep_losses) / len(ep_losses):.1f}, {len(move_stack)}"
                     msg += " moves total"

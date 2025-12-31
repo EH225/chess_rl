@@ -115,7 +115,7 @@ def create_ep_record(move_stack: List[chess.Move], initial_state: str = None) ->
         if board.is_kingside_castling(move):  # Check if this move is a king-side castle
             ep_record[f"{color}_ks_castle"] += 1
         if board.is_queenside_castling(move):  # Check if this move is a queen-side castle
-            ep_record[f"{color}_ks_castle"] += 1
+            ep_record[f"{color}_qs_castle"] += 1
         if board.gives_check(move):  # Check if the move creates a check
             ep_record[f"{color}_checks"] += 1
         if move.promotion:  # Check if this move is a pawn promotion
