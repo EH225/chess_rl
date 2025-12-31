@@ -342,11 +342,87 @@ class DVN:
         """
         raise NotImplementedError
 
+    def generate_states(self, n_steps: int, epsilon: float, t: int) -> List[str]:
+        """
+        Generates n_steps new on policy game states by running a series of games in paraellel to distribute
+        the work load across all available threads. Actions are selected using an epsilon greedy strategy.
+        Games are stopped midway and resumed the next time this method is called if a worker do not reach a
+        terminal state by the end of their alloted step count.
+
+        :param n_steps: The number of new on-policy game states to generate.
+        :param epsilon: The exploration parameter i.e. with probability e the agent selects a random action.
+        :return: A list of FEN strings encodings of all the board states reached for each of the n_steps.
+        """
+        # 1). Save the current model weights and distribute so they are accessible to all dask workers
+        self.distribute_model_weights()
+
+        # 2). Look for episode records if it exists, we will continue simulating from where we last left off
+        # otherwise create a series of new ep_records for a new set of games
+        nthreads = self.dask_client.scheduler_info()["total_threads"]  # How many threads are available to use
+        if not hasattr(self, "ep_records"): # If this property doesn't yet exist, then this is the first time
+            # the run_games method is being called, create it to track the progress of each game simulated
+            self.ep_records = [create_ep_record([]) for i in range(nthreads)]
+
+        # 3). Make len(self.ep_records) match nthreads i.e. add or remove records if needed if the number of
+        # threads has changed from one call of this run_games method to the next
+        if len(self.ep_records) > nthreads:  # Remove elements from ep_records to match nthreads, truncate
+            # the games which have not yet finished, but still log the results
+            removals = []
+            while len(self.ep_records) > nthreads:
+                removals.append(self.ep_records.pop())
+            self.update_ep_history(removals, "train")  # Log all the training episodes in the csv log
+        elif len(self.ep_records) < nthreads: # If there are more threads than before, add more ep_records
+            self.ep_records += [create_ep_record([]) for i in range(nthreads - len(self.ep_records))]
+
+        # 4). Continue running the games in parallel to generate at least n_steps new game states
+        steps = np.ceil(n_steps / nthreads)  # Each game / thread will generate n_stesp // nthreads steps
+        # In order to get different results from each _run_game call, we have to differentiate the input so
+        # we pass in i, the int counter which has no effect on the simulated games themselves
+        futures = [self.dask_client.submit(self._generate_states, ep_record, steps, epsilon, self.config, i)
+                   for i , ep_record in enumerate(self.ep_records)]
+        finished_ep_records = []  # Collect all the training episodes which have fully completed
+        unfinished_ep_records = []  # Collect the nthread training episodes which have not fully finished
+        all_states = []  # Aggregate all the on-policy states generated from all the games (n_steps)
+        for (states, ep_recs, ep_rec) in self.dask_client.gather(futures):
+            all_states.extend(states)  # Aggregate all the state FEN strings i.e. n_steps in total
+            finished_ep_records.extend(ep_recs)  # Add to the list of finished episode records
+            unfinished_ep_records.append(ep_rec)  # Append where the ep_record of the last step
+
+        self.dask_client.cancel(futures)  # Explicitly clean up the futures tasks, drop from memory
+        self.ep_records = unfinished_ep_records # Update to pick up from where we left off next call
+        for ep_record in finished_ep_records:
+            ep_record["t"] = t
+        self.update_ep_history(finished_ep_records, "train")  # Log all the training episodes in the csv log
+        return all_states
+
+    @staticmethod
+    def _generate_states(self, ep_record: Dict, n_steps: int, epsilon: float, config: Dict, *args, **kwargs
+                         ) -> Tuple[List[str], List[Dict], Dict]:
+        """
+        Runs a continuation of the episode denoted in ep_record for a specified number of steps using an
+        epsilon-greedy strategy. This function is designed to be called in parallel using dask to simulate
+        self-play games and generate new game states. The number of on-policy steps to take is specified since
+        games can be of variable length depending on how quickly they reach a resolution.
+
+        :param ep_record: An episode record to continue running steps for. If a terminal state is reached,
+            then the completed ep_record is added to the list of completed ep_recorded returned.
+        :param steps: The number of total on-policy game steps to take. This will continue to play the game
+            detailed in ep_record and also continue thereafter with a new game if that one ends midway before
+            a total of n_steps are taken.
+        :param epsilon: The exploration parameter i.e. with probability e the agent selects a random action.
+        :param config: A config dictionary read from yaml that specifies hyperparameters.
+        :return: Returns 3 items
+            - A list of on-policy game states i.e. a list of FEN string encodings of length n_steps
+            - A list of completed episode records for games that finishing during the n_steps taken
+            - An episode record denoting information on the current unfinished game at the end of n_steps
+        """
+        raise NotImplementedError
+
     def run_games(self, n_games: int, epsilon: float, t: int) -> List[str]:
         """
         Runs a series of on-policy n_games in parallel using dask to distribute the work load across all
         available threads. Actions are selected using an epsilon greedy strategy. This method returns a list
-        of board states generated from the n_grames run.
+        of board states generated from the n_games run.
 
         :param n_games: The number of on-policy games to run in parallel.
         :param epsilon: The exploration parameter i.e. with probability e the agent selects a random action.
@@ -371,7 +447,7 @@ class DVN:
         return all_states
 
     @staticmethod
-    def _run_game(epsilon: float, config: Dict) -> Tuple[List[str], Dict]:
+    def _run_game(epsilon: float, config: Dict, *args, **kwargs) -> Tuple[List[str], Dict]:
         """
         Runs 1 on-policy self-play chess match with an epsilon greedy action selection strategy. This function
         is designed to be called in parallel using dask to simulate many games simultaneously to generate
@@ -439,9 +515,8 @@ class DVN:
         self.logger.info(f"Training model: {self.config['model']}")
         self.logger.info(f"Running model training on device: {self.device}")
 
-        local_cluster = LocalCluster(ip=get_lan_ip(), threads_per_worker=4, scheduler_port=8786,
-                                     local_directory=PARENT_DIR, n_workers=os.cpu_count() // 4,
-                                     processes=True)
+        local_cluster = LocalCluster(ip=get_lan_ip(), local_directory=PARENT_DIR, processes=True,
+                                     **self.config["cluster"])
         # preload=[os.path.join(PARENT_DIR, "utils/init_worker.py")])
         self.dask_client = Client(local_cluster)  # Create a scheduler and connect it with the local cluster
         self.dask_client.register_worker_callbacks(setup_path)  # Configure sys.path of all workers
@@ -492,7 +567,7 @@ class DVN:
         # before entering the main training loop
         exp_schedule.update(t)  # Update the epsilon obj before passing into the method below
         start_time = time.perf_counter()  # Track how long it takes to fill the replay buffer
-        states = self.run_games(self.config["hyper_params"]["warm_up"], exp_schedule.param, t)
+        states = self.generate_states(self.config["hyper_params"]["warm_up"], exp_schedule.param, t)
         replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
         self.logger.info(f"({runtime(start_time)}) Replay buffer populated with {len(states)} states")
 
@@ -514,11 +589,12 @@ class DVN:
             iter_start = time.perf_counter()  # Track how long the full training iteration takes
             # A). Play a series of on-policy games in parallel using dask to generate new states
             start_time = time.perf_counter()  # Measure how long each step takes as well
-            n_games = self.config["hyper_params"]["learning_freq"]
-            states = self.run_games(n_games, exp_schedule.param, t)
+            n_steps = self.config["hyper_params"]["learning_freq"] # The number of new game states to create
+            # states = self.run_games(n_games, exp_schedule.param, t)
+            states = self.generate_states(n_steps, exp_schedule.param, t)
             replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
-            msg = (f"\t({runtime(start_time)}) {n_games} games and {len(states)} states generated with eps: "
-                   f"{exp_schedule.param:.6f}")
+            msg = (f"\t({runtime(start_time)}) {len(states)} states generated with eps: "
+                   "{exp_schedule.param:.6f}")
             self.logger.info(msg)
 
             # B). Perform training parameter update steps by sampling from the replay buffer

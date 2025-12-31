@@ -539,42 +539,17 @@ class ChessAgent(DVN):
         if isinstance(state_batch, str):  # Accept a lone string, convert it to a list of size 1
             state_batch = [state_batch, ]  # All lines below expect state_batch to be a list
 
-        # 1). Init the right kind of v_network model according to the config passed
+        # 1). Init the right kind of v_network model and load weights according to the config passed
         if t < config["pre_train"]["nsteps_pretrain"]:
             v_network = MaterialHeuristic()  # Use the material heuristic value estimator during pre-training
-        else:
-            v_network = globals()[config["model_class"]](config)
-
-        # 2). Load in the weights of the model
-        if t >= config["pre_train"]["nsteps_pretrain"]:  # No weight loading needed during pre-training,
-            # the value estimator model used is the heuristic model which has no trainable parameters
-            if config["model_training"]["local_cluster_only"] is False:
-                # Load in the model weights from the local dask working directory, which were broadcasted out
-                # since local_cluster_only is False, the weights are uploaded and distributed via dask
-                worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
-                subfolders = set([x for x in os.listdir(worker_temp_dir)
-                                  if os.path.isdir(os.path.join(worker_temp_dir, x))])
-                wts_dir = os.path.join(worker_temp_dir, subfolders.pop())
-            else:  # Otherwise, read the model weights in from the local weights save directory location
-                # i.e. 1 location, not the dask-worker space, no dask_client.upload_file used
-                wts_dir = config["model_training"]["load_dir"]
-
-            if config["model_training"]["use_scripted_model"]:
-                wts_path = os.path.join(wts_dir, "model_scripted.bin")
-                v_network.model = torch.jit.load(wts_path, map_location="cpu")
-            else:  # If not loading a pre-compiled model, then load in the state dictionary
-                wts_path = os.path.join(wts_dir, "model.bin")
-                v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
-
-        # 3). Determine the search function specified by the config
-        if t < config["pre_train"]["nsteps_pretrain"]:
             search_func = getattr(search_algos, config["pre_train"]["name"])
             search_func_kwargs = config["pre_train"]
         else:
+            v_network = _load_worker_model(config)  # Otherwise load in the full torch model w/ weights
             search_func = getattr(search_algos, config["search_func"]["name"])
             search_func_kwargs = config["search_func"]
 
-        # 4). Compute the TD targets sequentially using the search function
+        # 2). Compute the TD targets sequentially using the search function
         state_values = np.zeros(len(state_batch), dtype=np.float32)  # 1 float state estimate per state
         total_nodes = np.zeros(len(state_batch), dtype=np.int32)
         max_depths = np.zeros(len(state_batch), dtype=np.int32)
@@ -589,6 +564,79 @@ class ChessAgent(DVN):
         return {"state_values": state_values, "total_nodes": total_nodes,
                 "max_depths": max_depths, "terminal_nodes": terminal_nodes}
 
+
+    @staticmethod
+    def _generate_states(self, ep_record: Dict, n_steps: int, epsilon: float, config: Dict,
+                         *args, **kwargs) -> Tuple[List[str], List[Dict], Dict]:
+        """
+        Runs a continuation of the episode denoted in ep_record for a specified number of steps using an
+        epsilon-greedy strategy. This function is designed to be called in parallel using dask to simulate
+        self-play games and generate new game states. The number of on-policy steps to take is specified since
+        games can be of variable length depending on how quickly they reach a resolution.
+
+        :param ep_record: An episode record to continue running steps for. If a terminal state is reached,
+            then the completed ep_record is added to the list of completed ep_recorded returned.
+        :param steps: The number of total on-policy game steps to take. This will continue to play the game
+            detailed in ep_record and also continue thereafter with a new game if that one ends midway before
+            a total of n_steps are taken.
+        :param epsilon: The exploration parameter i.e. with probability e the agent selects a random action.
+        :param config: A config dictionary read from yaml that specifies hyperparameters.
+        :return: Returns 3 items
+            - A list of on-policy game states i.e. a list of FEN string encodings of length n_steps
+            - A list of completed episode records for games that finishing during the n_steps taken
+            - An episode record denoting information on the current unfinished game at the end of n_steps
+        """
+        # 1). Init the right kind of v_network model and load weights according to the config passed
+        v_network = _load_worker_model(config)  # Load in the full torch model w/ latest weights
+
+        # 2). Determine the search function specified by the config
+        search_func = getattr(search_algos, config["search_func"]["name"])
+
+        # 3). Use the ep_record to re-instate the chess match previously started
+        state = ep_record["end_state"]
+        completed_ep_records = []
+
+        states = []  # Aggregate all states reached during game play
+        env = ChessEnv(step_limit=config["model_training"]["max_train_moves"], initial_state=state)
+        env.step_count = ep_record["total_moves"]  # Update the internal move counter
+        if env.step_count >= env.step_limit:  # Mark that the episode has ended if at the maximal move limit
+            env.ep_ended = True
+
+        while len(states) < n_steps:  # Iterate until we've generated the desired number of game states
+            states.append(state)  # Append at the start of the loop iteration so that we add the intial
+            # state but not the ending state so that the ep_record records the next state to begin at
+
+            if env.ep_ended:  # Check if the episode has reached the end i.e. a terminal game state
+                # Record the ep_record of the game played in the list of completed ep_records
+                completed_ep_record = create_ep_record(env.board.move_stack)  # Summarize moves made here
+                # Merge info about the new moves played here with the info about the game from where it began
+                for key, val in ep_record:
+                    if key not in ["episode_id", "outcome", "winner", "end_state"]:
+                        completed_ep_record[key] += val
+                completed_ep_records.append(completed_ep_record)  # Collect all completed episode records
+                ep_record = create_ep_record([]) # Create a new ep_record for an initial board to play again
+                state = env.reset()  # Reset the env and generate the starting board state
+
+            else: # If the game has not yet ended, then take an action and continue self-play
+                if np.random.rand() < epsilon:  # With probability epsilon, choose a random action
+                    action, state_value, action_values = env.action_space.sample(), 0, np.zeros(0)
+                else:  # Otherwise actually use the model to evaluate
+                    action, state_value, action_values, info = search_func(state=state, model=v_network,
+                                                                           **config["search_func"])
+
+                # Perform the selected action in the env, get the new state, reward, and stopping flags
+                new_state, reward, terminated, truncated = env.step(action)
+                state = new_state  # Update for next iteration, move to the new FEN state representation
+
+        # At the end, combine the info from any moves made here with the starting ep_record
+        final_ep_record = create_ep_record(env.board.move_stack)  # Summarize moves made here
+        # Merge info about the new moves played here with the info about the game from where it began
+        for key, val in ep_record:
+            if key not in ["episode_id", "outcome", "winner", "end_state"]:
+                final_ep_record[key] += val
+
+        return states, completed_ep_records, final_ep_record
+
     @staticmethod
     def _run_game(epsilon: float, config: Dict, *args, **kwargs) -> Tuple[List[str], Dict]:
         """
@@ -600,37 +648,18 @@ class ChessAgent(DVN):
         :param config: A config dictionary read from yaml that specifies hyperparameters.
         :return: A list of game states (a list of FEN strings) and an ep_record summarizing the game.
         """
-        # 1). Init the right kind of v_network model according to the config passed
-        v_network = globals()[config["model_class"]](config)
+        # 1). Init the right kind of v_network model and load weights according to the config passed
+        v_network = _load_worker_model(config)  # Load in the full torch model w/ latest weights
 
-        # 2). Load in the weights of the model for on-policy state generation
-        if config["model_training"]["local_cluster_only"] is False:
-            # Load in the model weights from the local dask working directory, which were broadcasted out
-            # since local_cluster_only is False, the weights are uploaded and distributed via dask
-            worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
-            subfolders = set([x for x in os.listdir(worker_temp_dir)
-                              if os.path.isdir(os.path.join(worker_temp_dir, x))])
-            wts_dir = os.path.join(worker_temp_dir, subfolders.pop())
-        else:  # Otherwise, read the model weights in from the local weights save directory location
-            # i.e. 1 location, not the dask-worker space, no dask_client.upload_file used
-            wts_dir = config["model_training"]["load_dir"]
-
-        if config["model_training"]["use_scripted_model"]:
-            wts_path = os.path.join(wts_dir, "model_scripted.bin")
-            v_network.model = torch.jit.load(wts_path, map_location="cpu")
-        else:  # If not loading a pre-compiled model, then load in the state dictionary
-            wts_path = os.path.join(wts_dir, "model.bin")
-            v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
-
-        # 3). Create a chess env and prepare recording variables
-        env = ChessEnv()
+        # 2). Create a chess env and prepare recording variables
+        env = ChessEnv(step_limit=config["model_training"]["max_train_moves"])
         state = env.reset()
         states = [state]  # Record all the states reached during game play
 
-        # 4). Determine the search function specified by the config
+        # 3). Determine the search function specified by the config
         search_func = getattr(search_algos, config["search_func"]["name"])
 
-        # 5). Run a self-play game until truncation or termination
+        # 4). Run a self-play game until truncation or termination
         while True:  # Run until the episode has finished
             if np.random.rand() < epsilon:  # With probability epsilon, choose a random action
                 action, state_value, action_values = env.action_space.sample(), 0, np.zeros(0)
@@ -651,3 +680,37 @@ class ChessAgent(DVN):
         ep_record = create_ep_record(env.board.move_stack)
 
         return states, ep_record
+
+
+def _load_worker_model(config: Dict) -> nn.Module:
+    """
+    Instantiates and loads in a v_network model with weighted saved to disk. This method is meant to be
+    called within dask worker functions and centralizes the logic of loading a v_network model based on
+    the config.
+
+    :param config: A config dictionary read from yaml that specifies hyperparameters.
+    :return: A v_network model with weights loaded in from disk according to the config.
+    """
+    # 1). Init the right kind of v_network model according to the config passed
+    v_network = globals()[config["model_class"]](config)
+
+    # 2). Load in the weights of the model for on-policy state generation
+    if config["model_training"]["local_cluster_only"] is False:
+        # Load in the model weights from the local dask working directory, which were broadcasted out
+        # since local_cluster_only is False, the weights are uploaded and distributed via dask
+        worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
+        subfolders = set([x for x in os.listdir(worker_temp_dir)
+                          if os.path.isdir(os.path.join(worker_temp_dir, x))])
+        wts_dir = os.path.join(worker_temp_dir, subfolders.pop())
+    else:  # Otherwise, read the model weights in from the local weights save directory location
+        # i.e. 1 location, not the dask-worker space, no dask_client.upload_file used
+        wts_dir = config["model_training"]["load_dir"]
+
+    if config["model_training"]["use_scripted_model"]:
+        wts_path = os.path.join(wts_dir, "model_scripted.bin")
+        v_network.model = torch.jit.load(wts_path, map_location="cpu")
+    else:  # If not loading a pre-compiled model, then load in the state dictionary
+        wts_path = os.path.join(wts_dir, "model.bin")
+        v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+
+    return v_network

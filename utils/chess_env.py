@@ -284,7 +284,7 @@ class ChessEnv:
             reward = 0
             terminated = False
 
-        truncated = (self.step_count == self.step_limit)  # Check if the current ep reaches the step limit
+        truncated = (self.step_count >= self.step_limit)  # Check if the current ep reaches the step limit
         self.ep_ended = terminated or truncated
         # For the next state, return the FEN representation which encoded the full state of the game
         return self.board.fen(), reward, terminated, truncated
