@@ -48,9 +48,9 @@ hyper_params:
     batch_size: 512 # The batch size when sampling training examples from the replay buffer
     buffer_size: 750000 # The frame capacity of the replay buffer
     gamma: 1.00 # The temporal discount factor of future rewards
-    learning_freq: 2048 # How many on policy game states to generate between learning updates
+    learning_freq: 1024 # How many on policy game states to generate between learning updates
     learning_updates: 4 # The number of learning update batches run each at each update interval 
-    warm_up: 2048 # The number of game states to generate to populate the replay buffer before traning begins
+    warm_up: 1024 # The number of game states to generate to populate the replay buffer before traning begins
     wt_decay: 0.00005 # Set an L2 regularization amount
 
     lr_begin: 0.0001 # The first value of the learning rate
