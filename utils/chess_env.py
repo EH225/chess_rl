@@ -87,7 +87,7 @@ def relative_material_diff(state: str) -> float:
     return np.clip((player_material / total_material) * 2 - 1 + (-0.1 if board.is_check() else 0), -1, 1)
 
 
-def create_ep_record(move_stack: List[chess.Move]) -> Dict:
+def create_ep_record(move_stack: List[chess.Move], initial_state: str = None) -> Dict:
     """
     This method takes in a move_stack of legal moves from an original board starting position and runs
     them through the chess game env and records key info about what occured during it along the way i.e.
@@ -99,7 +99,7 @@ def create_ep_record(move_stack: List[chess.Move]) -> Dict:
     :param move_stack: A list of chess.Moves objects denoting the evolution of the game.
     :return: A dictionary with key info from the progression of the game recorded in move_stack.
     """
-    board = chess.Board()  # Start off with a blank board
+    board = chess.Board() if initial_state is None else chess.Board(initial_state)
     ep_df_cols = ["episode_id", "outcome", "winner", "total_moves", "white_material_diff", "white_checks",
                   "black_checks", "white_promotions", "black_promotions", "white_en_passant",
                   "black_en_passant", "white_ks_castle", "black_ks_castle", "white_qs_castle",

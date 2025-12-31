@@ -607,7 +607,7 @@ class ChessAgent(DVN):
 
             if env.ep_ended:  # Check if the episode has reached the end i.e. a terminal game state
                 # Record the ep_record of the game played in the list of completed ep_records
-                completed_ep_record = create_ep_record(env.board.move_stack)  # Summarize moves made here
+                completed_ep_record = create_ep_record(env.board.move_stack, state)
                 # Merge info about the new moves played here with the info about the game from where it began
                 for key, val in ep_record.items():
                     if key not in ["episode_id", "outcome", "winner", "end_state"]:
@@ -628,7 +628,7 @@ class ChessAgent(DVN):
                 state = new_state  # Update for next iteration, move to the new FEN state representation
 
         # At the end, combine the info from any moves made here with the starting ep_record
-        final_ep_record = create_ep_record(env.board.move_stack)  # Summarize moves made here
+        final_ep_record = create_ep_record(env.board.move_stack, state)  # Summarize moves made here
         # Merge info about the new moves played here with the info about the game from where it began
         for key, val in ep_record.items():
             if key not in ["episode_id", "outcome", "winner", "end_state"]:

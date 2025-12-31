@@ -516,8 +516,8 @@ class DVN:
         self.logger.info(f"Running model training on device: {self.device}")
 
         local_cluster = LocalCluster(ip=get_lan_ip(), local_directory=PARENT_DIR, processes=True,
-                                     **self.config["cluster"])
-        # preload=[os.path.join(PARENT_DIR, "utils/init_worker.py")])
+                                     **self.config["cluster"],
+                                     preload=[os.path.join(PARENT_DIR, "utils/init_worker.py")])
         self.dask_client = Client(local_cluster)  # Create a scheduler and connect it with the local cluster
         self.dask_client.register_worker_callbacks(setup_path)  # Configure sys.path of all workers
         # For any other computer on the network, activate the chess_rl venv and then run to add resources:
