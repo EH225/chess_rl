@@ -19,6 +19,7 @@ from core.base_components import DVN
 import core.search_algos as search_algos
 from utils.chess_env import ChessEnv, create_ep_record, relative_material_diff
 from typing import Tuple, List, Dict
+from dask.distributed import Variable
 
 torch.backends.mkldnn.enabled = True  # Usually enabled, but set to be sure
 
@@ -694,22 +695,26 @@ def _load_worker_model(config: Dict) -> nn.Module:
     v_network = globals()[config["model_class"]](config)
 
     # 2). Load in the weights of the model for on-policy state generation
-    if config["model_training"]["local_cluster_only"] is False:
-        # Load in the model weights from the local dask working directory, which were broadcasted out
-        # since local_cluster_only is False, the weights are uploaded and distributed via dask
-        worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
-        subfolders = set([x for x in os.listdir(worker_temp_dir)
-                          if os.path.isdir(os.path.join(worker_temp_dir, x))])
-        wts_dir = os.path.join(worker_temp_dir, subfolders.pop())
-    else:  # Otherwise, read the model weights in from the local weights save directory location
-        # i.e. 1 location, not the dask-worker space, no dask_client.upload_file used
+    if config["model_training"]["local_cluster_only"] is True:
         wts_dir = config["model_training"]["load_dir"]
+        if config["model_training"]["use_scripted_model"]:
+            wts_path = os.path.join(wts_dir, "model_scripted.bin")
+            v_network.model = torch.jit.load(wts_path, map_location="cpu")
+        else:  # If not loading a pre-compiled model, then load in the state dictionary
+            wts_path = os.path.join(wts_dir, "model.bin")
+            v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
 
-    if config["model_training"]["use_scripted_model"]:
-        wts_path = os.path.join(wts_dir, "model_scripted.bin")
-        v_network.model = torch.jit.load(wts_path, map_location="cpu")
-    else:  # If not loading a pre-compiled model, then load in the state dictionary
-        wts_path = os.path.join(wts_dir, "model.bin")
-        v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+    else:  # We are using potentially many computers to run tasks, load in the weights from the distributed
+        # variable on the cluster
+        model_weights = Variable("model_weights").get()
+        if config["model_training"]["use_scripted_model"]:  # Running with a scripted model
+            worker_temp_dir = os.path.join(PARENT_DIR, "dask-scratch-space")
+            subfolders = set([x for x in os.listdir(worker_temp_dir)
+                              if os.path.isdir(os.path.join(worker_temp_dir, x))])
+            wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model_scripted.bin")
+            v_network.model = torch.jit.load(wts_path, map_location="cpu")  # Load in the model
+            v_network.model.load_state_dict(model_weights)  # Load in the weights to the model
+        else:  # THe model is already initialized, just load in the weights
+            v_network.load_state_dict(model_weights)
 
     return v_network

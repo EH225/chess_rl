@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from dask.distributed import Client, LocalCluster
+from dask.distributed import Variable
 from itertools import batched
 from tqdm.contrib.logging import logging_redirect_tqdm
 from typing import Callable, List, Tuple, Union, Dict, Optional
@@ -261,8 +262,9 @@ class DVN:
 
     def distribute_model_weights(self) -> None:
         """
-        This method is called before dask operations are run, i.e. before run_games and compute_td_targets to
-        save and distribute the most up-to-date model weights for reading from disk by the dask workers:
+        This method is called before dask operations are run, i.e. before generate_states, run_games, or
+        compute_td_targets to save and distribute the most up-to-date model weights for reading from disk by
+        the dask workers:
             A). Save the current model weights to disk
             B). Save a scripted version if use_scripted_model is True
             C). Broadcast weights to the workers if local_cluster_only is False
@@ -275,15 +277,19 @@ class DVN:
             self.v_network.eval()
             scripted = torch.jit.script(self.v_network.model)
             scripted.save(os.path.join(save_dir, "model_scripted.bin"))
-            upload_model_name = "model_scripted.bin"
-        else:
-            upload_model_name = "model.bin"
 
         # Don't need to save the optimizer state here, we only will load in the model
         if self.config["model_training"]["local_cluster_only"] is False:  # To support other computing
             # resources, broadcast out the model weights to all dask workers to read from disk
             start_time = time.perf_counter()  # Track how long the upload process takes
-            self.dask_client.upload_file(os.path.join(save_dir, upload_model_name))
+            self.model_weights_dask.set(self.v_network.state_dict())  # Update the distributed wts var
+            if self.config["model_training"]["use_scripted_model"]:  # If using a scripted model with multiple
+                # computers, then distribute the scripted model 1x to all the workers, will still load in the
+                # model weights from the state dict each time, but is needed for the model structure
+                if not hasattr(self, "scripted_model_uploaded"):
+                    self.dask_client.upload_file(os.path.join(save_dir, "model_scripted.bin"))
+                else:
+                    self.scripted_model_uploaded = True  # Mark as True to prevent future repeat uploads
             self.logger.info(f"\t   ({runtime(start_time)}) Model weights uploaded to dask workers")
 
     def compute_td_targets(self, state_batch: List[str], t: int) -> Tuple[np.ndarray]:
@@ -520,6 +526,7 @@ class DVN:
                                      preload=[os.path.join(PARENT_DIR, "utils/init_worker.py")])
         self.dask_client = Client(local_cluster)  # Create a scheduler and connect it with the local cluster
         self.dask_client.register_worker_callbacks(setup_path)  # Configure sys.path of all workers
+        self.model_weights_dask = Variable("model_weights")  # Create a distributed var to hold the wts
         # For any other computer on the network, activate the chess_rl venv and then run to add resources:
         #    dask-worker tcp://192.168.12.227:8786 --nthreads 11 --nworkers 16
         self.logger.info(f"Dask client scheduler address: {self.dask_client.scheduler.address}")
