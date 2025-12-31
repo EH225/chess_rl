@@ -594,7 +594,7 @@ class DVN:
             states = self.generate_states(n_steps, exp_schedule.param, t)
             replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
             msg = (f"\t({runtime(start_time)}) {len(states)} states generated with eps: "
-                   "{exp_schedule.param:.6f}")
+                   f"{exp_schedule.param:.6f}")
             self.logger.info(msg)
 
             # B). Perform training parameter update steps by sampling from the replay buffer
