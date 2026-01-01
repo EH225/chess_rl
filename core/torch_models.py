@@ -702,7 +702,7 @@ def _load_worker_model(config: Dict) -> nn.Module:
             v_network.model = torch.jit.load(wts_path, map_location="cpu")
         else:  # If not loading a pre-compiled model, then load in the state dictionary
             wts_path = os.path.join(wts_dir, "model.bin")
-            v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+            v_network.model.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
 
     else:  # We are using potentially many computers to run tasks, load in the weights from the distributed
         # variable on the cluster
@@ -714,7 +714,7 @@ def _load_worker_model(config: Dict) -> nn.Module:
             wts_path = os.path.join(worker_temp_dir, subfolders.pop(), "model_scripted.bin")
             v_network.model = torch.jit.load(wts_path, map_location="cpu")  # Load in the model
             v_network.model.load_state_dict(model_weights)  # Load in the weights to the model
-        else:  # THe model is already initialized, just load in the weights
+        else:  # The model is already initialized, just load in the weights
             v_network.model.load_state_dict(model_weights)
 
     device = detect_device()
