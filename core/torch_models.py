@@ -702,7 +702,7 @@ def _load_worker_model(config: Dict) -> nn.Module:
             v_network.model = torch.jit.load(wts_path, map_location="cpu")
         else:  # If not loading a pre-compiled model, then load in the state dictionary
             wts_path = os.path.join(wts_dir, "model.bin")
-            v_network.model.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
+            v_network.load_state_dict(torch.load(wts_path, map_location="cpu", weights_only=True))
 
     else:  # We are using potentially many computers to run tasks, load in the weights from the distributed
         # variable on the cluster
