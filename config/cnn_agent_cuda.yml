@@ -38,9 +38,9 @@ model_training:
     eval_freq: 25 # The frequency of evaluation runs measured in training timesteps
     max_eval_moves: 250 # Set the max number of moves per eval self-play game
     max_train_moves: 250 # Set the max number of moves per self-play game during training
-    compile: False # Whether to compile the model before training
+    compile: True # Whether to compile the model before training
     compile_mode: "default" # The compile mode to use if compile is True
-    local_cluster_only: False # Set to False to configure the cluster to be open to additional resources joining
+    local_cluster_only: True # Set to False to configure the cluster to be open to additional resources joining
     use_scripted_model: False # If set to True, then the scripted version of the model is used instead
 
 hyper_params:
