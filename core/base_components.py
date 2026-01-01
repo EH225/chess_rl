@@ -680,7 +680,7 @@ class DVN:
 
         # 1). Sample from the reply buffer to get recent states (encoded a FEN strings)
         start_time = time.perf_counter()  # Measure how long each step takes
-        state_batch, wts, indices = replay_buffer.sample(batch_size, beta)
+        state_batch, wts, indices, td_tgts, timesteps = replay_buffer.sample(batch_size, beta)
         msg = (f"\t   ({runtime(start_time)}) Sampled {len(wts)} obs from replay buffer, avg_wts: "
                f"{wts.mean():.3f}")
         self.logger.info(msg)
@@ -713,10 +713,26 @@ class DVN:
         # 5). Compute the TD target values using a search function to get more accurate values by looking
         # ahead, we want to train the network to estimate this search function in the forward pass
         start_time = time.perf_counter()  # Measure how long each step takes
-        v_search_estimates, total_nodes, max_depths, terminal_nodes = self.compute_td_targets(state_batch, t)
-        msg = f"\t   ({runtime(start_time)}) {len(v_search_estimates)} y state value estimates generated"
+        td_targets = np.zeros(len(state_batch), dtype=np.float64)  # Create an array to hold the TD targets
+        if t < self.config["pre_train"]["nsteps_pretrain"]: # Determine how long back to reuse TD targets
+            k = int(self.config["pre_train"]["td_cache_len"])
+        else:  # Use a (potentially) different td_cache_len if beyond the warm-up period
+            k = int(self.config["model_training"]["td_cache_len"])
+        # Reuse anything that is within k of the current timestep and doens't have a negative timestep
+        reuse_td_tgt_idx = (t - timesteps <= k) & (timesteps >= 0)
+        td_targets[reuse_td_tgt_idx] = td_tgts[reuse_td_tgt_idx]  # Copy over values for re-use
+        state_batch_ = [s for s, flag in zip(state_batch, reuse_td_tgt_idx) if not flag]  # Filter for False
+        if len(state_batch_) > 0:  # If there are ones to compute, then run the calculations
+            search_est, total_nodes, max_depths, terminal_nodes = self.compute_td_targets(state_batch_, t)
+            td_targets[~reuse_td_tgt_idx] = search_est  # Fill in the rest of the TD target values
+            replay_buffer.update_td_targets(indices[~reuse_td_tgt_idx], search_est, t)
+        else:  # If no searching was required, then fill in 0 placeholders for the screen update reporting
+            search_est, total_nodes, max_depths, terminal_nodes = (np.zeros(0), np.zeros(1),
+                                                                   np.zeros(1), np.zeros(1))
+        msg = (f"\t   ({runtime(start_time)}) {len(search_est)} y state value estimates computed, "
+               f"{1 - reuse_td_tgt_idx.mean():.1%} of the total {len(td_targets)} TD targets")
         self.logger.info(msg)
-        v_est_np = v_search_estimates.copy()
+        v_est_np = td_targets.copy()
         summary_stats = [f"{x:.2f}" for x in [v_est_np.max(), v_est_np.min(), v_est_np.mean(),
                                               np.abs(v_est_np).mean(), v_est_np.std()]]
         summary_stats = "(max, min, mean, abs mean, std) = (" + ", ".join(summary_stats) + ")"
@@ -730,10 +746,10 @@ class DVN:
         # 6). Compute gradients wrt to the MSE Loss function
         # Convert the inputs for this calculation to torch.Tensor and move to self.device
         wts = torch.from_numpy(wts).to(self.device)
-        v_search_estimates = torch.from_numpy(v_search_estimates).to(self.device)
+        td_targets = torch.from_numpy(td_targets).to(self.device)
 
         start_time = time.perf_counter()  # Measure how long each step takes
-        loss, td_errors = self.calc_loss(v_est, v_search_estimates, wts)  # td_errors is a np.array
+        loss, td_errors = self.calc_loss(v_est, td_targets, wts)  # td_errors is a np.array
         replay_buffer.update_priorities(indices, td_errors)  # Update the priorities for the obs sampled
         loss.backward()  # Compute gradients wrt to the trainable parameters of self.v_network
 
