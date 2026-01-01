@@ -18,7 +18,6 @@ from dask.distributed import Variable
 from itertools import batched
 from tqdm.contrib.logging import logging_redirect_tqdm
 from typing import Callable, List, Tuple, Union, Dict, Optional
-import logging
 
 import torch
 import torch.nn as nn
@@ -640,7 +639,7 @@ class DVN:
                 self.logger.info(msg)
 
             # Report how long this iteration took to run and also how long the rest are estimated to take
-            iter_runtime = iter_start - time.perf_counter()
+            iter_runtime = time.perf_counter() - iter_start
             n_iters_left = self.config["hyper_params"]["nsteps_train"] - 1 - t
             end_est = convert_seconds(n_iters_left * iter_runtime)
             msg = f"({runtime(iter_start)}) Full training iteration complete, est time left: {end_est}"

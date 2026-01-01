@@ -45,7 +45,8 @@ def head_to_head_match(white_config_name: str, black_config_name: str, initial_s
     return env.board.move_stack, env.board.outcome()
 
 
-def interactive_match(config_name: str, player_color: str = "white", initial_state: str = None) -> None:
+def interactive_match(config_name: str, player_color: str = "white", initial_state: str = None,
+                      verbose: bool = True) -> None:
     """
     This function allows a user to play an interactive match vs one of the RL chess agents saved to disk in
     the results folder. Players will be prompted to input their next move and the RL chess agent will play
@@ -107,9 +108,10 @@ def interactive_match(config_name: str, player_color: str = "white", initial_sta
     msg = ("- black wins!" if board.turn else "- white wins!") if board.is_checkmate() else ""
     print(f"Outcome: {outcome.termination.name} {msg}")
 
+## TODO: Add some verbose printouts to see how the algo sees each move
 
 if __name__ == "__main__":
-    # interactive_match("cnn_agent", "white") # Play against one of the AI models
-    interactive_match("heuristic_agent", "white") # Play against one of the AI models
+    interactive_match("cnn_agent2", "white") # Play against one of the AI models
+    # interactive_match("heuristic_agent", "white") # Play against one of the AI models
     # Have 2 models play each other head-to-head
     # head_to_head_match("CNN_agent", "CNN_agent", record_path=os.path.join(PARENT_DIR, "test.mp4"))

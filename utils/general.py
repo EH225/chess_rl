@@ -88,7 +88,7 @@ def convert_seconds(seconds: float) -> str:
     hours = seconds // 3600  # Get the number of hours
     minutes = (seconds % 3600) // 60  # Get the number of minutes
     seconds = seconds % 60  # Get the remaining seconds
-    return f"{hours}h {minutes}m {seconds}s"
+    return f"{int(hours)}h {int(minutes)}m {int(round(seconds, 0))}s"
 
 
 class LinearSchedule:
