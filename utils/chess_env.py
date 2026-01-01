@@ -34,12 +34,12 @@ def material_diff(state: str) -> float:
     """
     Computes the net material difference of the current board state from the perpsective of the player who is
     to move next where each piece is worth:
-        pawn (1), knight (3), bishop (3), rook (5), queen (9), king (0)
+        pawn (1), knight (3), bishop (3), rook (5), queen (9), king (1)
 
     :param state: A FEN string denoting the current game state.
     :return: A int value representing the net material difference for the player whose turn it is to go next.
     """
-    piece_values = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
+    piece_values = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9, "k": 1}
     board = chess.Board(state)  # Convert to a chess.Board object to access the piece map
     net_material = 0
     for p in board.piece_map().values():
@@ -57,7 +57,7 @@ def relative_material_diff(state: str) -> float:
     """
     Computes a heuristic estimate of the game outcome [-1, +1] using the relative material difference from
     the perspective of the player who is to go next where the value of each piece is:
-        pawn (0.125), knight (3), bishop (3), rook (5), queen (10), king (0)
+        pawn (0.125), knight (3), bishop (3), rook (5), queen (10), king (1)
 
     The relative material difference is defined as:
         (player material) / (total material) * 2 - 1 -> maps to a value [-1, +1]
@@ -65,7 +65,7 @@ def relative_material_diff(state: str) -> float:
     If the current player to move is in check, an additional -0.1 penalty is added to discentivize being in
     check. Check is a vulnerable position and restricts the moves of the player moving next. This heuristic
     function also return -1 or 0 if the game is at a terminal state (was checkmated or reached a draw). All
-    values returned are clipped to [-1, +1]
+    values returned are clipped to [-1, +1].
 
     :param state: A FEN string denoting the current game state.
     :return: A float value estimate of the game outcome based on relative material.
@@ -74,7 +74,7 @@ def relative_material_diff(state: str) -> float:
     if board.is_game_over():  # If the game is in an end state, return the terminal reward
         return -1.0 if board.is_checkmate() else 0.0
 
-    piece_values = {"p": 0.125, "n": 3, "b": 3, "r": 5, "q": 10, "k": 0}
+    piece_values = {"p": 0.125, "n": 3, "b": 3, "r": 5, "q": 10, "k": 1}
     total_material, player_material = 0, 0
     for p in board.piece_map().values():
         piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece

@@ -46,7 +46,7 @@ def head_to_head_match(white_config_name: str, black_config_name: str, initial_s
 
 
 def interactive_match(config_name: str, player_color: str = "white", initial_state: str = None,
-                      verbose: bool = True) -> None:
+                      verbose: bool = False) -> None:
     """
     This function allows a user to play an interactive match vs one of the RL chess agents saved to disk in
     the results folder. Players will be prompted to input their next move and the RL chess agent will play
@@ -61,6 +61,7 @@ def interactive_match(config_name: str, player_color: str = "white", initial_sta
     :param player_color: The color of the user playing i.e. "white" or "black".
     :param initial_state: A FEN board encoding of the starting state of the game. If not provided, the game
         begins at the standard chess start.
+    :param verbose: If set to True, then a verbose print out of the agent decision making is provided.
     :return: None.
     """
     player_color = player_color.lower()
@@ -98,7 +99,22 @@ def interactive_match(config_name: str, player_color: str = "white", initial_sta
                 except:
                     print("Move invalid, please try again")
         else:  # Otherwise it's the turn of the AI chess bot RL agent to play
-            move = model.agent_move_func(board)
+            if verbose is False:
+                move = model.agent_move_func(board)
+
+            else: # Verbose printing, show what the model was thinking on this play
+                best_action, state_value, action_values, info = model._search_func(
+                    state=board.fen(), model=model.v_network, **model.config["search_func"])
+                legal_moves = list(board.legal_moves)
+                print(f"\nState Value: {state_value:.2f}")
+                print(f"Best Action: {best_action} {legal_moves[best_action]}")
+                print(f"Nodes Evaluated: {info[0]}, Max Depth: {info[1]}, Terminal Nodes: {info[2]}")
+                move_vals = [(move, val) for move, val in zip(legal_moves, action_values)]
+                # List each possible move and it's approx value in descending order
+                for move, value in sorted(move_vals, key=lambda x: -x[1]):
+                    print(f"   {move} {value:.3f}")
+                move = legal_moves[best_action]
+
             board.push(move)
         check = board.king(board.turn) if board.is_check() else None
         display(chess.svg.board(board, orientation=player_color, lastmove=board.peek(), check=check))
@@ -111,7 +127,7 @@ def interactive_match(config_name: str, player_color: str = "white", initial_sta
 ## TODO: Add some verbose printouts to see how the algo sees each move
 
 if __name__ == "__main__":
-    interactive_match("cnn_agent2", "white") # Play against one of the AI models
-    # interactive_match("heuristic_agent", "white") # Play against one of the AI models
+    # interactive_match("cnn_agent2", "white") # Play against one of the AI models
+    interactive_match("heuristic_agent", "white", verbose=True) # Play against one of the AI models
     # Have 2 models play each other head-to-head
     # head_to_head_match("CNN_agent", "CNN_agent", record_path=os.path.join(PARENT_DIR, "test.mp4"))
