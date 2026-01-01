@@ -4,9 +4,9 @@ the environment and allows for a sampling of past experiences for training steps
 """
 
 import numpy as np
-import torch
+import pandas as pd
+import torch, os
 from typing import Optional, List
-
 
 class ReplayBuffer:
     """
@@ -67,7 +67,6 @@ class ReplayBuffer:
         self.eps = float(eps)  # Epsilon value for computing priority scores i.e. p = (td_err + eps) ** alpha
         self.alpha = float(alpha)  # Controls how much more we sample high priority obs, alpha=0 equal prob
         self.max_priority = float(eps)  # The priority values are all initialized at eps
-
 
         self.seed = seed  # Store the random seed provided if any
         self.rng = np.random.default_rng(seed)  # Create a random number generator for sampling with a seed
@@ -165,3 +164,42 @@ class ReplayBuffer:
         priorities = (td_errors + self.eps) ** self.alpha  # Compute updated priority values from TD diffs
         self.priority[indices] = priorities  # Update values internally
         self.max_priority = max(self.max_priority, priorities.max())  # Update the max globally priority
+
+    def save_data(self, output_path: str) -> None:
+        """
+        Saves the data currently stored in the replay buffer to disk for quick reload later.
+
+        :param output_path: A path ending in .parquet to write tp.
+        :returns: None, saves data to disk.
+        """
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)  # Make dir if needed
+        df = pd.DataFrame({"state": self.states[:self.num_in_buffer],
+                           "priority": self.priority[:self.num_in_buffer]})
+        df.to_parquet(output_path)  # Save down the data to disk as parquet
+
+    def load_data(self, file_path: str) -> None:
+        """
+        Reads in data from parquet saved on disk to re-populate the replay buffer. If the file path cannot
+        be located, then no reading is done.
+
+        :param file_path: A file path ending in .parquet to read from.
+        :returns: None, updates internal state.
+        """
+        if os.path.exists(file_path):
+            df = pd.read_parquet(file_path)  # Read in the cached buffer data from parquet
+
+            if len(df) > self.size: # Drop extra data if there is more than the buffer's max size
+                df = df.iloc[:self.size, :]
+            self.states[:len(df)] = df["state"].values # Restore states
+            self.priority[:len(df)] = df["priority"].values # Restore priority values
+
+            if len(df) == self.size: # Check if this fills the buffer completely
+                self.buffer_full = True
+                self.next_idx = 0
+            else:
+                self.buffer_full = False
+                self.next_idx = len(df) - 1
+
+            self.max_priority = self.priority.max()
+            self.num_in_buffer = len(df)
+            self.last_idx = None

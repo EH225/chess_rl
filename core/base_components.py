@@ -559,18 +559,24 @@ class DVN:
         t = 0  # These counter vars are used by triggers for training, logging, evaluating etc.
 
         # If a train_ep_history.csv file exists on disk, then read it in and use that to update t
-        ep_df_file_path = os.path.join(self.config["output"]["plot_output"], "train_ep_history.csv")
+        ep_df_file_path = os.path.join(self.config["output"]["output_path"], "train_ep_history.csv")
         if os.path.exists(ep_df_file_path):  # Check if a train_ep_history.csv file exists
             ep_df = pd.read_csv(ep_df_file_path)  # Read in the data from disk
             t = int(ep_df["t"].iloc[-1]) + 1  # Re-instate the largest t value recorded in the cached values
 
         # 4). Populate the replay buffer with some boards to start so that we have something to work with
         # before entering the main training loop
-        exp_schedule.update(t)  # Update the epsilon obj before passing into the method below
-        start_time = time.perf_counter()  # Track how long it takes to fill the replay buffer
-        states = self.generate_states(self.config["hyper_params"]["warm_up"], exp_schedule.param, t)
-        replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
-        self.logger.info(f"({runtime(start_time)}) Replay buffer populated with {len(states)} states")
+        file_dir = os.path.join(self.config["output"]["output_path"], "replay_cache.parquet")
+        replay_buffer.load_data(file_dir)
+        if replay_buffer.num_in_buffer == 0: # If there was nothing to loaded from disk, then populate
+            exp_schedule.update(t)  # Update the epsilon obj before passing into the method below
+            start_time = time.perf_counter()  # Track how long it takes to fill the replay buffer
+            states = self.generate_states(self.config["hyper_params"]["warm_up"], exp_schedule.param, t)
+            replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
+            self.logger.info(f"({runtime(start_time)}) Replay buffer populated with {len(states)} states")
+        else:
+            self.logger.info(f"{replay_buffer.num_in_buffer} States loaded into replay buffer from disk")
+
 
         # 5). If we're starting from scratch, then run an eval episode to log the untrained performance
         if t == 0:
@@ -580,6 +586,7 @@ class DVN:
 
         # 6). Run the full training loop, generate on-policy games, perform param updates, run evals
         n_steps_train = self.config["hyper_params"]["nsteps_train"]
+        last_replay_buffer_cache = t
         while t < n_steps_train:  # Loop until we reach the global training
             # Update the exploration rate, learning rate and beta as we go, update them for the current t
             exp_schedule.update(t)
@@ -632,6 +639,11 @@ class DVN:
                 replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game
                 msg = f"\t({runtime(start_time)}) {n_ep} eval episode(s) run with score: {score:.1f}"
                 self.logger.info(msg)
+
+            # F). Periodically cache values to disk from the replay buffer
+            if t - last_replay_buffer_cache > 5:
+                file_dir = os.path.join(self.config["output"]["output_path"], "replay_cache.parquet")
+                replay_buffer.save_data(file_dir)
 
             # Report how long this iteration took to run and also how long the rest are estimated to take
             iter_runtime = time.perf_counter() - iter_start
@@ -782,7 +794,7 @@ class DVN:
         if record_last is True:  # Save the last evaluation episode as a recording
             episode_id = 0  # Default to 0 to start with
             # Ideally we want to keep the episode_id recording numbers in sync with the eval history episodes
-            ep_df_file_path = os.path.join(self.config["output"]["plot_output"], "eval_ep_history.csv")
+            ep_df_file_path = os.path.join(self.config["output"]["output_path"], "eval_ep_history.csv")
             if os.path.exists(ep_df_file_path):  # Check if a eval_ep_history.csv file exists
                 ep_df = pd.read_csv(ep_df_file_path)  # Read in the data from disk
                 episode_id = int(ep_df["episode_id"].iloc[-1]) + 1  # Update from the cached log file
@@ -806,7 +818,7 @@ class DVN:
         :return: None, updates the local {prefix}_ep_history.csv cache or creates one.
         """
         filename = "ep_history.csv" if not prefix else f"{prefix}_ep_history.csv"
-        ep_df_file_path = os.path.join(self.config["output"]["plot_output"], filename)
+        ep_df_file_path = os.path.join(self.config["output"]["output_path"], filename)
         if os.path.exists(ep_df_file_path):  # Check if an {prefix}_ep_history file has been cached
             ep_df = pd.read_csv(ep_df_file_path)  # Read in the data from disk
         else:
