@@ -5,7 +5,7 @@ post-processing pipeline.
 import time, sys, logging, yaml, os
 import numpy as np
 import pandas as pd
-import socket
+import socket, torch
 from typing import Tuple, List
 import matplotlib
 
@@ -130,6 +130,18 @@ class LinearSchedule:
         else:  # After nsteps, set param to param_end
             self.param = self.param_end
         return self.param
+
+
+def detect_device() -> str:
+    """
+    Auto detects what hardware is available and returns a device name accordingly.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        return "mps"
+    else:  # Default to using the CPU if no GPU accelerator
+        return "cpu"
 
 
 def get_lan_ip():

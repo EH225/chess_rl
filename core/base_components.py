@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 
 from torch.utils.tensorboard import SummaryWriter
-from utils.general import get_logger, runtime, convert_seconds, LinearSchedule, get_lan_ip
+from utils.general import get_logger, runtime, convert_seconds, LinearSchedule, get_lan_ip, detect_device
 from utils.replay_buffer import ReplayBuffer
 from utils.chess_env import ChessEnv, save_recording, save_move_stack, create_ep_record, move_stack_to_states
 from utils.evaluate import evaluate_agent_game
@@ -89,12 +89,7 @@ class DVN:
         self.v_network, self.optimizer = None, None
 
         # Auto-detect which device should be used by the model by what hardware is available
-        if torch.cuda.is_available():
-            self.device = "cuda"
-        elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
-            self.device = "mps"
-        else:  # Default to using the CPU if no GPU accelerator
-            self.device = "cpu"
+        self.device = detect_device()
 
         # Call the build method to instantiate the needed variables for the RL model
         self.build()

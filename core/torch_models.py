@@ -18,11 +18,11 @@ import torch.nn.functional as F
 from core.base_components import DVN
 import core.search_algos as search_algos
 from utils.chess_env import ChessEnv, create_ep_record, relative_material_diff
+from utils.general import detect_device
 from typing import Tuple, List, Dict
 from dask.distributed import Variable
 
 torch.backends.mkldnn.enabled = True  # Usually enabled, but set to be sure
-
 
 ##################################################
 ### Pre-Training Material Heuristic Definition ###
@@ -717,4 +717,7 @@ def _load_worker_model(config: Dict) -> nn.Module:
         else:  # THe model is already initialized, just load in the weights
             v_network.model.load_state_dict(model_weights)
 
+    device = detect_device()
+    v_network = v_network.to(device) # Move this model to the GPU is available
+    v_network.device = device  # Update the device of the model after moving it
     return v_network
