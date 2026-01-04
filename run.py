@@ -21,8 +21,6 @@ sys.path.insert(0, CURRENT_DIR)
 
 import argparse, shutil, torch
 from utils.general import read_yaml
-from utils.chess_env import ChessEnv
-from core.base_components import LinearSchedule
 from core.torch_models import ChessAgent
 
 torch.set_float32_matmul_precision("high")  # Enables bf16 GEMMs on GPUs that support it

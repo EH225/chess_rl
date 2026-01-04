@@ -568,7 +568,7 @@ class DVN:
         # before entering the main training loop
         file_dir = os.path.join(self.config["output"]["output_path"], "replay_cache.parquet")
         replay_buffer.load_data(file_dir)
-        if replay_buffer.num_in_buffer == 0: # If there was nothing to loaded from disk, then populate
+        if replay_buffer.num_in_buffer == 0:  # If there was nothing to loaded from disk, then populate
             exp_schedule.update(t)  # Update the epsilon obj before passing into the method below
             start_time = time.perf_counter()  # Track how long it takes to fill the replay buffer
             states = self.generate_states(self.config["hyper_params"]["warm_up"], exp_schedule.param, t)
@@ -576,7 +576,6 @@ class DVN:
             self.logger.info(f"({runtime(start_time)}) Replay buffer populated with {len(states)} states")
         else:
             self.logger.info(f"{replay_buffer.num_in_buffer} States loaded into replay buffer from disk")
-
 
         # 5). If we're starting from scratch, then run an eval episode to log the untrained performance
         if t == 0:
@@ -714,7 +713,7 @@ class DVN:
         # ahead, we want to train the network to estimate this search function in the forward pass
         start_time = time.perf_counter()  # Measure how long each step takes
         td_targets = np.zeros(len(state_batch), dtype=np.float64)  # Create an array to hold the TD targets
-        if t < self.config["pre_train"]["nsteps_pretrain"]: # Determine how long back to reuse TD targets
+        if t < self.config["pre_train"]["nsteps_pretrain"]:  # Determine how long back to reuse TD targets
             k = int(self.config["pre_train"]["td_cache_len"])
         else:  # Use a (potentially) different td_cache_len if beyond the warm-up period
             k = int(self.config["model_training"]["td_cache_len"])

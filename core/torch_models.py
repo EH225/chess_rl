@@ -96,6 +96,7 @@ class MLP(nn.Module):
             nn.LeakyReLU(),
             ResBlockMLP(512),
             ResBlockMLP(512),
+            ResBlockMLP(512),
             nn.Linear(512, 256),
             nn.LeakyReLU(),
             nn.Linear(256, 128),
@@ -335,6 +336,17 @@ class CNN(nn.Module):
 ### Transformer Value-Network Definition ###
 ############################################
 # TODO: Section marker
+
+
+### TODO: Need to use a .model property here and wrap things here, each of these claases needs to have a
+# .model attribute
+
+class TorchTransformer(nn.Module):
+    """
+
+    """
+    # ADD ALL THE STUFF BELOW HERE
+    # Then define self.model = TorchTransformer
 
 class Transformer(nn.Module):
     """

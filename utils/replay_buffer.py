@@ -62,7 +62,7 @@ class ReplayBuffer:
         self.buffer_full = False  # Set to True when the buffer reaches full capacity
 
         # Init variables to store the info for each transition observation
-        self.states = [0 for i in range(size)]  # Current states (s) as FEN encodings
+        self.states = ["" for i in range(size)]  # Current states (s) as FEN encodings
         self.priorities = np.zeros(size)  # The |TD error| + eps, for prioritized experience replay
         self.td_targets = np.zeros(size, dtype=np.float64)  # Cache the TD targets associated with each state
         self.timesteps = -np.ones(size, dtype=np.int64)  # Record when the TD target value was cached

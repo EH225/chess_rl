@@ -25,8 +25,8 @@ pre_train: # Specify the number of pre-training steps and what search function t
     td_cache_len: 200 # The number of training timesteps to re-use the same TD targets for
 
 cluster:
-    n_workers: 5
-    threads_per_worker: 3
+    n_workers: 7
+    threads_per_worker: 2
     scheduler_port: 8786
 
 model_training:
@@ -46,7 +46,7 @@ model_training:
     use_scripted_model: False # If set to True, then the scripted version of the model is used instead
 
 hyper_params:
-    nsteps_train: 400 # The number of total training timesteps to run i.e. how many gradient updates to make
+    nsteps_train: 500 # The number of total training timesteps to run i.e. how many gradient updates to make
     batch_size: 512 # The batch size when sampling training examples from the replay buffer
     buffer_size: 750000 # The frame capacity of the replay buffer
     gamma: 1.00 # The temporal discount factor of future rewards
