@@ -39,7 +39,7 @@ class ReplayBuffer:
     but uninformative transitions.
     """
 
-    def __init__(self, size: int, eps: float = 1e-5, alpha: float = 0.6, seed: Optional[int] = None):
+    def __init__(self, size: int, eps: float = 0.01, alpha: float = 0.6, seed: Optional[int] = None):
         """
         The max state capacity of the replay buffer is specified by the size input. Game states are
         represented by their FEN encoding.
@@ -102,6 +102,8 @@ class ReplayBuffer:
         :param state: A FEN string value encoding the current state of the chess game.
         :return: An integer index designating the location where the frame was stored internally.
         """
+        if len(state) == 0: # Do not add if an empty string is passed
+            return self.last_idx
         self.states[self.next_idx] = state  # Record in the replay buffer at the next write location
         self.last_idx = self.next_idx  # Record the index where this new frame was written to
         self.next_idx = self._get_next_idx(self.next_idx)  # Update next_idx to the next write location, wrap

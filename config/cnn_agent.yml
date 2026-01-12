@@ -37,7 +37,7 @@ model_training:
     clip_val: 2.0 # The norm of the gradient vector used in grad clipping
     saving_freq: 10 # The frequency of saving model weights measured in training timesteps
     eval_freq: 25 # The frequency of evaluation runs measured in training timesteps
-    max_eval_moves: 250 # Set the max number of moves per eval self-play game
+    max_eval_moves: 5 # Set the max number of moves per eval self-play game
     max_train_moves: 250 # Set the max number of moves per self-play game during training
     td_cache_len: 10 # The number of training timesteps to re-use the same TD targets for
     compile: False # Whether to compile the model before training
@@ -55,15 +55,15 @@ hyper_params:
     warm_up: 10000 # The number of game states to generate to populate the replay buffer before traning begins
     wt_decay: 0.00005 # Set an L2 regularization amount
 
-    lr_begin: 0.001 # The first value of the learning rate
-    lr_end: 0.0001 # The final value of the learning rate
+    lr_begin: 0.0005 # The first value of the learning rate
+    lr_end: 0.0005 # The final value of the learning rate
     lr_nsteps: 300 # The number of steps over which the learning rate is decayed
 
     eps_begin: 1.0 # The first value of the epsilon exploration probability
     eps_end: 0.01 # The final value of the epsilon exploration probability
     eps_nsteps: 300 # The number of steps over which the epsilon exploration probability is decayed
 
-    eps: 1e-5 # The min priority value given to every transition for priorty sampling
+    eps: 0.01 # The min priority value given to every transition for priorty sampling
     alpha: 0.1 # Controls the degree of prioritizing higher TD errors, alpha == 0 creates uniform sampling
     beta_begin: 0.4 # The first value of beta used in importance sampling
     beta_end: 1.0 # The final value of beta used in importance sampling

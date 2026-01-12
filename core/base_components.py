@@ -644,7 +644,7 @@ class DVN:
                 start_time = time.perf_counter()  # Measure how long each step takes
                 file_dir = os.path.join(self.config["output"]["output_path"], "replay_cache.parquet")
                 replay_buffer.save_data(file_dir)
-                self.logger(f"\t({runtime(start_time)}) Replay buffer entries cached to parquet on disk")
+                self.logger.info(f"\t({runtime(start_time)}) Replay buffer entries cached to parquet on disk")
 
             # Report how long this iteration took to run and also how long the rest are estimated to take
             iter_runtime = time.perf_counter() - iter_start
