@@ -246,7 +246,9 @@ class CNN(nn.Module):
             nn.Flatten(),  # (batch_size, 256, 8, 8) -> (batch_size, 16384)
             nn.Linear(256 * 8 * 8, 256),  # (batch_size, 16384) -> (batch_size, 256)
             nn.LeakyReLU(),
-            nn.Linear(128, 1),  # (batch_size, 128) -> (batch_size, 1)
+            nn.Linear(128, 64),  # (batch_size, 128) -> (batch_size, 64)
+            nn.LeakyReLU(),
+            nn.Linear(64, 1),  # (batch_size, 128) -> (batch_size, 1)
             nn.Tanh()
         )  # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
         self.device = next(self.model.parameters()).device.type
