@@ -596,7 +596,10 @@ class DVN:
             iter_start = time.perf_counter()  # Track how long the full training iteration takes
             # A). Play a series of on-policy games in parallel using dask to generate new states
             start_time = time.perf_counter()  # Measure how long each step takes as well
-            n_steps = self.config["hyper_params"]["learning_freq"]  # The number of new game states to create
+            # The number of new game states to create, which can be expensive so we scale this in proportion
+            # to the epsilon i.e. if eps is high, then generating states is fast because most moves are
+            # selected randomly, when eps is low, it takes longer bc more forward passes and searching is used
+            n_steps = self.config["hyper_params"]["learning_freq"] * min(0.1, exp_schedule.param)
             # states = self.run_games(n_games, exp_schedule.param, t)
             states = self.generate_states(n_steps, exp_schedule.param, t)
             replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game

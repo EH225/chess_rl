@@ -64,7 +64,7 @@ hyper_params:
     eps_nsteps: 300 # The number of steps over which the epsilon exploration probability is decayed
 
     eps: 0.01 # The min priority value given to every transition for priorty sampling
-    alpha: 0.1 # Controls the degree of prioritizing higher TD errors, alpha == 0 creates uniform sampling
+    alpha: 0.6 # Controls the degree of prioritizing higher TD errors, alpha == 0 creates uniform sampling
     beta_begin: 0.4 # The first value of beta used in importance sampling
     beta_end: 1.0 # The final value of beta used in importance sampling
     beta_nsteps: 300 # The number of steps over which the beta for importance sampling is increased

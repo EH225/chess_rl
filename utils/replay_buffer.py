@@ -105,6 +105,8 @@ class ReplayBuffer:
         if len(state) == 0: # Do not add if an empty string is passed
             return self.last_idx
         self.states[self.next_idx] = state  # Record in the replay buffer at the next write location
+        self.priorities[self.next_idx] = self.max_priority  # Init as the max priority seen so far to make
+        # sure that new obs have a high probability of being sampled at least 1x when they enter the buffer
         self.last_idx = self.next_idx  # Record the index where this new frame was written to
         self.next_idx = self._get_next_idx(self.next_idx)  # Update next_idx to the next write location, wrap
         # around back to 0 at the beginning again if we reach the end
