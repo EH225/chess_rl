@@ -125,7 +125,7 @@ def interactive_match(config_name: str, player_color: str = "white", initial_sta
     print(f"Outcome: {outcome.termination.name} {msg}")
 
 if __name__ == "__main__":
-    interactive_match("cnn_agent", "white") # Play against one of the AI models
+    interactive_match("mlp_agent", "white", verbose=True) # Play against one of the AI models
     # interactive_match("heuristic_agent", "white", verbose=True) # Play against one of the AI models
     # Have 2 models play each other head-to-head
     # head_to_head_match("CNN_agent", "CNN_agent", record_path=os.path.join(PARENT_DIR, "test.mp4"))

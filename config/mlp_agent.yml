@@ -12,9 +12,9 @@ output:
     clear_all: False # If set to True, then the output_path is cleared at the start, deletes existing results
 
 search_func: # This defines kwargs that will be passed to the search function from core/search_algos.py
-    name: "monte_carlo_tree_search"
+    name: "minimax_search"
     batch_size: 32 # The batch_size used for generating state value estimates
-    n_iters: 128 # The number of Monte Carlo tree search iterations to run
+    horizon: 2 # The number of forward moves ahead to simulate in the search minimax tree
 
 pre_train: # Specify the number of pre-training steps and what search function to use
     nsteps_pretrain: 500 # The number of the full nsteps_train to run in pre-training mode

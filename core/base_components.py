@@ -644,7 +644,7 @@ class DVN:
                 start_time = time.perf_counter()  # Measure how long each step takes
                 file_dir = os.path.join(self.config["output"]["output_path"], "replay_cache.parquet")
                 replay_buffer.save_data(file_dir)
-                msg = f"\t({runtime(start_time)}) Replay buffer entries cached to parquet on disk"
+                self.logger(f"\t({runtime(start_time)}) Replay buffer entries cached to parquet on disk")
 
             # Report how long this iteration took to run and also how long the rest are estimated to take
             iter_runtime = time.perf_counter() - iter_start
@@ -679,9 +679,11 @@ class DVN:
 
         # 1). Sample from the reply buffer to get recent states (encoded a FEN strings)
         start_time = time.perf_counter()  # Measure how long each step takes
-        state_batch, wts, indices, td_tgts, timesteps = replay_buffer.sample(batch_size, beta)
+        state_batch, wts, indices, td_tgts, timesteps, last_sampled = replay_buffer.sample(batch_size, beta)
+        avg_last_sampled = [x for x in last_sampled if x != 0] # Filter out the -1s for never sampled before
+        avg_last_sampled = t - sum(avg_last_sampled) / len(avg_last_sampled) # Compute the avg
         msg = (f"\t   ({runtime(start_time)}) Sampled {len(wts)} obs from replay buffer, avg_wts: "
-               f"{wts.mean():.3f}")
+               f"{wts.mean():.3f}, obs were sampled on average {avg_last_sampled:.1f} timesteps ago")
         self.logger.info(msg)
 
         # [state_batch, wts, indices] -> (batch_size, ) lists of values
@@ -698,7 +700,7 @@ class DVN:
         # from each state as the initial starting state
         start_time = time.perf_counter()  # Measure how long each step takes
         self.v_network.train()  # Set to train mode before generating gradient tracked predictions
-        with torch.autocast(device_type=self.device, dtype=torch.bfloat16):  # Use BFloat16
+        with torch.autocast(device_type=self.device, dtype=torch.float16):  # Use Float16 mixed precision
             v_est = self.v_network(state_batch).reshape(-1)  # Returns a torch.Tensor on self.device
         self.logger.info(f"\t   ({runtime(start_time)}) {len(v_est)} y-hat state value estimates generated")
         v_est_np = v_est.detach().to(torch.float32).cpu().numpy()  # Convert over to numpy for reporting
@@ -748,8 +750,9 @@ class DVN:
         td_targets = torch.from_numpy(td_targets).to(self.device)
 
         start_time = time.perf_counter()  # Measure how long each step takes
-        loss, td_errors = self.calc_loss(v_est, td_targets, wts)  # td_errors is a np.array
-        replay_buffer.update_priorities(indices, td_errors)  # Update the priorities for the obs sampled
+        with torch.autocast(device_type=self.device, dtype=torch.float16):  # Use Float16 mixed precision
+            loss, td_errors = self.calc_loss(v_est, td_targets, wts)  # td_errors is a np.array
+        replay_buffer.update_priorities(indices, td_errors, t)  # Update the priorities for the obs sampled
         loss.backward()  # Compute gradients wrt to the trainable parameters of self.v_network
 
         # total_norm records the L2 norm across all gradients i.e. the pre-clipping global gradient norm

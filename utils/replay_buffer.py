@@ -65,7 +65,8 @@ class ReplayBuffer:
         self.states = ["" for i in range(size)]  # Current states (s) as FEN encodings
         self.priorities = np.zeros(size)  # The |TD error| + eps, for prioritized experience replay
         self.td_targets = np.zeros(size, dtype=np.float64)  # Cache the TD targets associated with each state
-        self.timesteps = -np.ones(size, dtype=np.int64)  # Record when the TD target value was cached
+        self.td_target_t = -np.ones(size, dtype=np.int64)  # Record when the TD target value was cached
+        self.last_sampled = -np.ones(size, dtype=np.int64) # Record the last time each obs was sampled
         self.eps = float(eps)  # Epsilon value for computing priority scores i.e. p = (td_err + eps) ** alpha
         self.alpha = float(alpha)  # Controls how much more we sample high priority obs, alpha=0 equal prob
         self.max_priority = float(eps)  # The priority values are all initialized at eps
@@ -133,10 +134,12 @@ class ReplayBuffer:
             small to large during training.
         :returns:
             state_batch: A list of state FEN strings.
-            wts: An np.ndarray of weight values associated with the sampled observations.
-            indices: An np.ndarray of indices of the sampled states.
-            td_targets: An np.ndarray of TD target values cached for each state.
-            timestamps: An np.ndarray timestamps denoting when each TD target was last updated.
+            wts: A np.ndarray of weight values associated with the sampled observations.
+            indices: A np.ndarray of indices of the sampled states.
+            td_targets: A np.ndarray of TD target values cached for each state.
+            td_target_t: A np.ndarray of timestamps denoting when each TD target was last updated.
+            last_sampled: A np np.ndarray of timestamps denoting when obs was last sampled, will have -1s
+                for obs that have never yet been sampled before.
         """
         assert isinstance(batch_size, int) and batch_size >= 1, "batch_size must be an int >= 1"
         assert batch_size <= self.num_in_buffer, "batch_size exceeds number of examples in the buffer needed"
@@ -153,9 +156,10 @@ class ReplayBuffer:
             wts = np.ones(batch_size)  # Set weights equal for all samples with weights of 1
 
         state_batch = [self.states[i] for i in indices]
-        return state_batch, wts, indices, self.td_targets[indices], self.timesteps[indices]
+        return (state_batch, wts, indices, self.td_targets[indices],
+                self.td_target_t[indices], self.last_sampled[indices])
 
-    def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray) -> None:
+    def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray, t: int) -> None:
         """
         Updates the priority scores associated with the indices provided, which determine how likely a given
         observation is to be sampled during training i.e. the larger the |td_error|, the more likely an obs is
@@ -163,11 +167,15 @@ class ReplayBuffer:
 
         :param indices: The indices associated with the |td_errors| provided.
         :param td_errors: An array of absolute TD errors i.e. |Q(s, a) - (r + gamma * max(Q(s')))|
+        :param t: The timestamp at which this update is being made, records the last time these obs were
+            sampled which is helpful for tracking the diversity of obs in each sampled batch.
         :returns: None, modifies the internal data structure holding the priorities for each obs.
         """
         priorities = (td_errors + self.eps) ** self.alpha  # Compute updated priority values from TD diffs
         self.priorities[indices] = priorities  # Update values internally
         self.max_priority = max(self.max_priority, priorities.max())  # Update the max globally priority
+        self.last_sampled[indices] = t  # Update the timestamp of when these indices were last sampled to the
+        # current timestep to update the internal tracking in the buffer
 
     def update_td_targets(self, indices: np.ndarray, td_targets: np.ndarray, t: int) -> None:
         """
@@ -182,7 +190,7 @@ class ReplayBuffer:
         :returns: None, modifies the internal data structure and caches the TD target values for each obs.
         """
         self.td_targets[indices] = td_targets  # Update TD target values internally
-        self.timesteps[indices] = t # Update the timesteps marking when these values are as of
+        self.td_target_t[indices] = t # Update the timesteps marking when these values are as of
 
     def save_data(self, output_path: str) -> None:
         """
@@ -195,7 +203,8 @@ class ReplayBuffer:
         df = pd.DataFrame({"state": self.states[:self.num_in_buffer],
                            "priority": self.priorities[:self.num_in_buffer],
                            "td_target": self.td_targets[:self.num_in_buffer],
-                           "timestep": self.timesteps[:self.num_in_buffer]
+                           "td_target_t": self.td_target_t[:self.num_in_buffer],
+                           "last_sampled": self.last_sampled[:self.num_in_buffer],
                            })
         df.to_parquet(output_path)  # Save down the data to disk as parquet
 
@@ -215,7 +224,8 @@ class ReplayBuffer:
             self.states[:len(df)] = df["state"].values # Restore FEN states encodings
             self.priorities[:len(df)] = df["priority"].values # Restore priority values
             self.td_targets[:len(df)] = df["td_target"].values # Restore the TD target values
-            self.timesteps[:len(df)] = df["timestep"].values # Restore the timestamps of the TD targets
+            self.td_target_t[:len(df)] = df["td_target_t"].values # Restore the timestamps of the TD targets
+            self.last_sampled[:len(df)] = df["last_sampled"].values # Restore the timestamps of last sampled
 
             if len(df) == self.size: # Check if this fills the buffer completely
                 self.buffer_full = True

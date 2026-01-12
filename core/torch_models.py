@@ -236,11 +236,15 @@ class CNN(nn.Module):
             nn.LeakyReLU(),  # (batch_size, 128, 8, 8)
             ResBlockCNN(128),  # (batch_size, 128, 8, 8)
 
-            # Dense fully-connected Block 3
-            nn.Flatten(),  # (batch_size, 128, 8, 8) -> (batch_size, 8192)
-            nn.Linear(128 * 8 * 8, 512),  # (batch_size, 8192) -> (batch_size, 512)
-            nn.LeakyReLU(),
-            nn.Linear(512, 128),  # (batch_size, 512) -> (batch_size, 128)
+            # Conv2d Block 3
+            nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(),  # (batch_size, 256, 8, 8)
+            ResBlockCNN(256),  # (batch_size, 256, 8, 8)
+
+            # Dense fully-connected Block 4
+            nn.Flatten(),  # (batch_size, 256, 8, 8) -> (batch_size, 16384)
+            nn.Linear(256 * 8 * 8, 256),  # (batch_size, 16384) -> (batch_size, 256)
             nn.LeakyReLU(),
             nn.Linear(128, 1),  # (batch_size, 128) -> (batch_size, 1)
             nn.Tanh()
