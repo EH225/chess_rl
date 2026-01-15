@@ -299,7 +299,7 @@ def run_pretraining(config_name: str) -> None:
     :returns: None.
     """
     # 1). Read in the config file specified by the user to be used for model training
-    config = read_yaml(os.path.join(PARENT_DIR, f"config/{args.config}.yml"))
+    config = read_yaml(os.path.join(PARENT_DIR, f"config/{config_name}.yml"))
 
     # 2). Initialize the model specified by the config file
     model_class_dict = {"MLP": MLP, "CNN": CNN, "Transformer": Transformer}
