@@ -263,7 +263,7 @@ class Trainer:
                     scaler.scale(loss).backward()
                     if self.grad_clip is not None:
                         scaler.unscale_(self.opt)  # Unscale before clipping
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+                        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
                     scaler.step(self.opt)  # Update the model parameters by taking a gradient step
                     scaler.update()
                 else:
