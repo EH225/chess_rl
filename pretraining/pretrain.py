@@ -1,5 +1,5 @@
 """
-### TODO ADD HERE
+This module contains the source code for running supervised pre-training of the value networks.
 """
 import sys, os
 
@@ -65,11 +65,11 @@ def get_dataloader(batch_size: int, spt_dataset_path: str, state_to_model_input:
     device = get_device()  # Auto-detect the available hardware
     dataset = SupervisedPretrainingDataset(spt_dataset_path, state_to_model_input)
     if device == "cuda":
-        num_workers, pin_memory, persistent_workers = 4, True, True
+        num_workers, pin_memory, persistent_workers = 2, True, True
     else:
         num_workers, pin_memory, persistent_workers = 0, False, False
     return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
-                      pin_memory=pin_memory, persistent_workers=persistent_workers)
+                      pin_memory=pin_memory, persistent_workers=persistent_workers, prefetch_factor=16)
 
 
 def infinite_loader(dataloader: DataLoader):
@@ -314,7 +314,7 @@ def run_pretraining(config_name: str) -> None:
 
     # 4). Train the value network using the Trainer class defined above
     trainer = Trainer(model=model, dataloader=dataloader, lr_start=1e-3, lr_end=1e-4, weight_decay=1e-2,
-                      train_num_steps=300000, grad_clip=1.0, save_every=10000,
+                      train_num_steps=100000, grad_clip=1.0, save_every=5000,
                       results_folder=os.path.join(CURRENT_DIR, config["model"]), use_amp=True,
                       use_latest_checkpoint=True)
     trainer.train()
@@ -326,5 +326,3 @@ if __name__ == "__main__":
     parser.add_argument("--config", help="The name of the config file to be used for training.")
     args = parser.parse_args()
     run_pretraining(args.config) # Run the supervised pre-training
-
-
