@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 
 from torch.utils.tensorboard import SummaryWriter
-from utils.general import get_logger, runtime, convert_seconds, LinearSchedule, get_lan_ip, detect_device
+from utils.general import get_logger, runtime, convert_seconds, LinearSchedule, get_lan_ip, get_device
 from utils.replay_buffer import ReplayBuffer
 from utils.chess_env import ChessEnv, save_recording, save_move_stack, create_ep_record, move_stack_to_states
 from utils.evaluate import evaluate_agent_game
@@ -41,11 +41,6 @@ def setup_path(dask_worker):
     PARENT_DIR = os.path.dirname(CURRENT_DIR)
     if PARENT_DIR not in sys.path:
         sys.path.insert(0, PARENT_DIR)
-
-
-def list_files():
-    import os
-    return os.listdir(os.getcwd())
 
 
 def worker_init():
@@ -89,7 +84,7 @@ class DVN:
         self.v_network, self.optimizer = None, None
 
         # Auto-detect which device should be used by the model by what hardware is available
-        self.device = detect_device()
+        self.device = get_device()
 
         # Call the build method to instantiate the needed variables for the RL model
         self.build()
@@ -599,7 +594,7 @@ class DVN:
             # The number of new game states to create, which can be expensive so we scale this in proportion
             # to the epsilon i.e. if eps is high, then generating states is fast because most moves are
             # selected randomly, when eps is low, it takes longer bc more forward passes and searching is used
-            n_steps = self.config["hyper_params"]["learning_freq"] * min(0.1, exp_schedule.param)
+            n_steps = self.config["hyper_params"]["learning_freq"] * max(0.1, exp_schedule.param)
             # states = self.run_games(n_games, exp_schedule.param, t)
             states = self.generate_states(n_steps, exp_schedule.param, t)
             replay_buffer.add_entries(states)  # Add the on policy states generated during the eval game

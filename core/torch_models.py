@@ -18,7 +18,7 @@ import torch.nn.functional as F
 from core.base_components import DVN
 import core.search_algos as search_algos
 from utils.chess_env import ChessEnv, create_ep_record, relative_material_diff
-from utils.general import detect_device
+from utils.general import get_device
 from typing import Tuple, List, Dict
 from dask.distributed import Variable
 
@@ -47,7 +47,7 @@ class MaterialHeuristic(nn.Module):
         if len(state_batch) > 0:
             return torch.Tensor([relative_material_diff(state) for state in state_batch])
         else:  # If an empty batch is passed, return an empty torch.Tensor
-            return torch.zeros(0).to(self.device)
+            return torch.zeros(0)
 
 
 ####################################
@@ -85,7 +85,7 @@ class MLP(nn.Module):
 
         The input to this network will be a batch of FEN string state representation of the current game
         state and output a torch.Tensor of the same length detailing the model's value estimates for each
-        input state.
+        input state. All trainable parameters are contained witihn self.model.
         """
         super().__init__()
         input_shape = 8 * 8 * 6 + 4 + 1  # 8 rows, 8 cols, 6 piece types, -1, 0, 1 values denoting a piece as
@@ -106,7 +106,8 @@ class MLP(nn.Module):
         )  # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
         self.device = next(self.model.parameters()).device.type
 
-    def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
+    @staticmethod
+    def state_to_model_input(state_batch: List[str]) -> torch.Tensor:
         """
         Converts an input batch of board states (encoded using FEN as a string) into the expected state
         representations for this model (torch.Tensor) and moves the data to the same device as this model.
@@ -166,7 +167,7 @@ class MLP(nn.Module):
         # Add info about castling rights and how close are to a draw based on the 50-move rule
         output = torch.concatenate([output, extra_info], dim=1)  # (B, 384) +  (B, 5) =  (B, 389)
         # Move the model_input to the required device so it can be run through the network before returning
-        return output.to(self.device)
+        return output
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -179,7 +180,7 @@ class MLP(nn.Module):
         """
         if len(state_batch) > 0:
             # Convert the input board into the expected state representation and pass it through the network
-            return self.model(self.state_to_model_input(state_batch)).squeeze(1)
+            return self.model(self.state_to_model_input(state_batch).to(self.device)).squeeze(1)
         else:  # If an empty batch is passed, return an empty torch.Tensor
             return torch.zeros(0).to(self.device)
 
@@ -220,7 +221,7 @@ class CNN(nn.Module):
 
         The input to this network will be a batch of FEN string state representation of the current game
         state and output a torch.Tensor of the same length detailing the model's value estimates for each
-        input state.
+        input state. All trainable parameters are contained witihn self.model.
         """
         super().__init__()
         self.model = nn.Sequential(
@@ -253,7 +254,8 @@ class CNN(nn.Module):
         )  # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
         self.device = next(self.model.parameters()).device.type
 
-    def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
+    @staticmethod
+    def state_to_model_input(state_batch: List[str]) -> torch.Tensor:
         """
         Converts an input batch of board states (encoded using FEN as a string) into the expected state
         representations for this model (torch.Tensor) and moves the data to the same device as this model.
@@ -320,7 +322,7 @@ class CNN(nn.Module):
             output[i, 16, :, :] = min(board.halfmove_clock, 100) / 100.0  # Scale to be [0, 1]
 
         # Move the model_input to the required device so it can be run through the network before returning
-        return output.to(self.device)
+        return output
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -333,7 +335,7 @@ class CNN(nn.Module):
         """
         if len(state_batch) > 0:
             # Convert the input board into the expected state representation and pass it through the network
-            return self.model(self.state_to_model_input(state_batch)).squeeze(1)
+            return self.model(self.state_to_model_input(state_batch).to(self.device)).squeeze(1)
         else:  # If an empty batch is passed, return an empty torch.Tensor
             return torch.zeros(0).to(self.device)
 
@@ -344,19 +346,11 @@ class CNN(nn.Module):
 # TODO: Section marker
 
 
-### TODO: Need to use a .model property here and wrap things here, each of these claases needs to have a
-# .model attribute
-
-class TorchTransformer(nn.Module):
-    """
-
-    """
-    # ADD ALL THE STUFF BELOW HERE
-    # Then define self.model = TorchTransformer
-
-class Transformer(nn.Module):
+class TransformerModel(nn.Module):
     """
     Implementation of a multi-headed self-attention transformer model for chess board value estimation.
+    This module is 100% pytorch and can be compiled. This is equlivalent to the other self.model objects
+    in the MLP and CNN that implement the value network using pytorch only.
     """
 
     def __init__(self, config, *args, **kwargs):
@@ -365,9 +359,7 @@ class Transformer(nn.Module):
         transformer paper "Attention is All You Need" (https://arxiv.org/abs/1706.03762) with multiple
         layers of self-attention blocks followed by an average pooling and linear projection layer.
 
-        The input to this network will be a batch of FEN string state representation of the current game
-        state and output a torch.Tensor of the same length detailing the model's value estimates for each
-        input state.
+        The input to thismodel will be a pre-processed tensor representing the current game state.
         """
         super().__init__()
         # Extract config parameters from the passed model config dictionary
@@ -393,7 +385,49 @@ class Transformer(nn.Module):
         self.proj = nn.Linear(self.embed_size, 1)  # Final linear projection after pooling to 1 output value
         self.device = next(self.encoder.parameters()).device.type
 
-    def state_to_model_input(self, state_batch: List[str]) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through the model which generates a value estimate of the current board position for
+        each state observation in the input x pre-processed state-batch i.e. an estimate of the expected
+        reward from the current state position.
+
+        :param x: A torch.Tensor of size (batch_size, 68) containing token indices.
+        :return: A torch.Tensor of size (batch_size, ) with the value estimates for each stating position.
+        """
+        # Pass the token integers through the embedding layer to convert them into embedding vectors
+        x = self.token_embeddings(x)  # (batch_size, 68) -> (batch_size, 68, embed_size)
+
+        # Add positional encodings to the first 64 elements corresponding to tiles on the chess board
+        x[:, :64, :] += self.pos_embeddings  # (batch_size, 68, embed_size)
+
+        x = self.encoder(x)  # Pass x through the encoder blocks, (batch_size, 68, embed_size)
+        # Perform global average pooling across all the output attention vectors to get a final vector
+        x = x.mean(axis=1)  # (batch_size, 68, embed_size) -> (batch_size, embed_size)
+        # Linear projection to 1 final output value estimate [-1, +1]
+        return F.tanh(self.proj(x)).squeeze(1)
+
+
+class Transformer(nn.Module):
+    """
+    Implementation of a multi-headed self-attention transformer model for chess board value estimation.
+    """
+
+    def __init__(self, config, *args, **kwargs):
+        """
+        Initializes a value network model as a transformer that follows the architecture of the original
+        transformer paper "Attention is All You Need" (https://arxiv.org/abs/1706.03762) with multiple
+        layers of self-attention blocks followed by an average pooling and linear projection layer.
+
+        The input to this network will be a batch of FEN string state representation of the current game
+        state and output a torch.Tensor of the same length detailing the model's value estimates for each
+        input state. All trainable parameters are contained witihn self.model.
+        """
+        super().__init__()
+        self.model = TransformerModel(config)
+        self.device = next(self.encoder.parameters()).device.type
+
+    @staticmethod
+    def state_to_model_input(state_batch: List[str]) -> torch.Tensor:
         """
         Converts an input batch of board states (encoded using FEN as a string) into the expected state
         representations for this model (torch.Tensor) and moves the data to the same device as this model.
@@ -457,15 +491,7 @@ class Transformer(nn.Module):
         output = output.reshape(len(state_batch), -1)  # Reshape to (batch_size, 64) to flatten
 
         # Add the additional 4 tokens for castling rights and move to the required device
-        output = torch.concat([output, castling], dim=1).to(self.device)  # (batch_size, 68) ints
-
-        # Pass these token integers through the embedding layer to convert them into embedding vectors
-        output = self.token_embeddings(output)  # (batch_size, 68, embed_size)
-
-        # Add positional encodings to the first 64 elements corresponding to tiles on the chess board
-        output[:, :64, :] += self.pos_embeddings
-
-        return output  # (batch_size, 68, embed_size)
+        return torch.concat([output, castling], dim=1)  # (batch_size, 68) ints torch.Tensor
 
     def forward(self, state_batch: List[str]) -> torch.Tensor:
         """
@@ -477,12 +503,8 @@ class Transformer(nn.Module):
         :return: A torch.Tensor of size (batch_size, ) with the value estimates for each stating position.
         """
         if len(state_batch) > 0:
-            x = self.state_to_model_input(state_batch)  # (batch_size, ) -> (batch_size, 68, embed_size)
-            x = self.encoder(x)  # Pass x through the encoder blocks, (batch_size, 68, embed_size)
-            # Perform global average pooling across all the output attention vectors to get a final vector
-            x = x.mean(axis=1)  # (batch_size, 68, embed_size) -> (batch_size, embed_size)
-            # Linear projection to 1 final output value estimate [-1, +1]
-            return F.tanh(self.proj(x)).squeeze(1)
+            x = self.state_to_model_input(state_batch).to(self.device)  # (batch_size, ) -> (batch_size, 68)
+            return self.model(x) # (batch_size, 68) -> (batch_size, ) forward pass through the value network
         else:  # If an empty batch is passed, return an empty torch.Tensor
             return torch.zeros(0).to(self.device)
 
@@ -735,7 +757,7 @@ def _load_worker_model(config: Dict) -> nn.Module:
         else:  # The model is already initialized, just load in the weights
             v_network.model.load_state_dict(model_weights)
 
-    device = detect_device()
+    device = get_device()
     v_network = v_network.to(device) # Move this model to the GPU is available
     v_network.device = device  # Update the device of the model after moving it
     return v_network

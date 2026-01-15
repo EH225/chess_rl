@@ -57,6 +57,7 @@ def max_depth(node):
 
 def material_heuristic(state: str) -> float:
     """
+    DEPRECIATED = USE relative_material_diff INSTEAD
     Computes a heuristic evaluation of state value based on net material from the perspective of the player
     whose turn is next according to the FEN state encoding.
 
