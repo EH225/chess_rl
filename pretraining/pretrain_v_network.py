@@ -291,13 +291,13 @@ class Trainer:
 
                 pbar.update(1)
 
-if __name__ == "__main__":
-    # 0). Get the input config specified by the user for which value network model to pre-train
-    parser = argparse.ArgumentParser(description="Run the supervised pre-training loop for a value network",
-                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--config", help="The name of the config file to be used for training.")
-    args = parser.parse_args()
+def run_pretraining(config_name: str) -> None:
+    """
+    This function runs supervised pre-training for a given model config name.
 
+    :param config_name: The name of the config to run supervised pre-training for.
+    :returns: None.
+    """
     # 1). Read in the config file specified by the user to be used for model training
     config = read_yaml(os.path.join(PARENT_DIR, f"config/{args.config}.yml"))
 
@@ -309,12 +309,22 @@ if __name__ == "__main__":
 
     # 3). Define other inputs required for training
     spt_dataset_path = os.path.join(CURRENT_DIR, "spt_dataset.parquet")
-    dataloader = get_dataloader(batch_size=128, spt_dataset_path=spt_dataset_path,
+    dataloader = get_dataloader(batch_size=512, spt_dataset_path=spt_dataset_path,
                                 state_to_model_input=v_network.state_to_model_input)
 
     # 4). Train the value network using the Trainer class defined above
-    trainer = Trainer(model=model, dataloader=dataloader, lr_start=1e-3, lr_end=1e-4, weight_decay=1e-3,
-                      train_num_steps=100000, grad_clip=1.0, save_every=1000,
+    trainer = Trainer(model=model, dataloader=dataloader, lr_start=1e-3, lr_end=1e-4, weight_decay=1e-2,
+                      train_num_steps=300000, grad_clip=1.0, save_every=10000,
                       results_folder=os.path.join(CURRENT_DIR, config["model"]), use_amp=True,
                       use_latest_checkpoint=True)
     trainer.train()
+
+if __name__ == "__main__":
+    # Get the input config specified by the user for which value network model to pre-train
+    parser = argparse.ArgumentParser(description="Run the supervised pre-training loop for a value network",
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("--config", help="The name of the config file to be used for training.")
+    args = parser.parse_args()
+    run_pretraining(args.config) # Run the supervised pre-training
+
+
