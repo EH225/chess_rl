@@ -379,7 +379,7 @@ class CNN(nn.Module):
             features = self.backbone(x)  # Get the shared deep latent features (batch_size, 256, 8, 8)
             # Pass these shared features to the policy and value sub-components to compute outputs
             policy_logits = self.policy_head(features)  # (batch_size, 1968)
-            value_estimates = self.value_head(features).suqeeze(1)  # (batch_size, )
+            value_estimates = self.value_head(features).squeeze(1)  # (batch_size, )
             return policy_logits, value_estimates
 
 
