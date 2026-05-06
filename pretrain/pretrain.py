@@ -393,7 +393,7 @@ class Trainer:
                     torch.cuda.empty_cache()
 
                 del policy_logits, value_est, policy_loss, value_loss, total_loss
-                del boards, value_tgt, policy_tgt
+                del state_tensors, value_tgt, policy_tgt
                 pbar.update(1)
 
 
