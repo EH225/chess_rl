@@ -142,9 +142,10 @@ class TqdmLoggingHandler(logging.Handler):
 
 
 class Trainer:
-    def __init__(self, model: nn.Module, dataloader: DataLoader, lr_start: float = 1e-4, lr_end: float = 1e-5,
-                 weight_decay: float = 1e-3, train_num_steps: int = 300000,
-                 adam_betas: Tuple[float] = (0.9, 0.99), grad_clip: float = 1.0, save_every: int = 10000,
+    def __init__(self, model: nn.Module, train_dataloader: DataLoader, val_dataloader: DataLoader,
+                 lr_start: float = 1e-4, lr_end: float = 1e-5, weight_decay: float = 1e-3,
+                 train_num_steps: int = 300000, adam_betas: Tuple[float] = (0.9, 0.99),
+                 grad_clip: float = 1.0, eval_every: int = 5000, save_every: int = 10000,
                  results_folder: str = None, use_amp: bool = False, use_latest_checkpoint: bool = True,
                  **kwargs):
         """
@@ -153,13 +154,15 @@ class Trainer:
         running a training loop to train from scratch or to continue from the last checkpoint.
 
         :param model: A value network implemented in pytorch.
-        :param dataloader: A dataloader that will yield the training batches.
+        :param train_dataloader: A dataloader that will yield the training batches.
+        :param val_dataloader: A dataloader that will yield the validation batches.
         :param lr_start: The initial learning rate.
         :param lr_end: The terminal training learning rate.
         :param weight_decay: The weight_decay to provide to the Adam optimizer for L2 regularization.
         :param train_num_steps: The number of training steps to run in total.
         :param adam_betas: Beta parameters for the adam optimizer.
         :param grad_clip: The amount of gradient clipping to use during training.
+        :param eval_every: Specifies how often to run evaluation metrics on the validation dataset.
         :param save_every: An int denoting how often to save the model weights and losses.
         :param results_folder: A location to save the results of training.
         :param use_amp: Whether to use automatic mixed-precision type casting during training.
@@ -202,11 +205,13 @@ class Trainer:
         self.device = get_device()  # Auto-detect what device to use for training
         self.grad_clip = grad_clip  # The amount of gradient clipping to use during training
         self.amp_dtype = get_amp_dtype(self.device) if use_amp else None
+        self.eval_every = eval_every # The frequency of validation set evals
         self.save_every = save_every  # The frequency of saving model weights
         self.train_num_steps = train_num_steps  # The total number of training steps
 
         # Save a pointer to the train and validation dataloaders
-        self.dataloader = dataloader
+        self.train_dataloader = train_dataloader
+        self.val_dataloader = val_dataloader
 
         # Configure the optimizer for training
         decay_params = [p for n, p in model.named_parameters()
@@ -228,7 +233,7 @@ class Trainer:
         self.scheduler = SequentialLR(self.opt, schedulers=[warmup, decay], milestones=[warmup_steps])
 
         self.step = 0  # Training step counter
-        self.all_losses = []  # Aggregate loss values during training
+        self.train_losses, self.val_losses = [], []  # Aggregate loss values during training
         self.move_uci_to_idx = create_move_to_int_map()  # Create a mapping from uci move to integer
 
         if use_latest_checkpoint:
@@ -253,7 +258,13 @@ class Trainer:
                 }
         torch.save(data, checkpoint_path)
         # Save down all the loss values produced by model training since the last caching
-        pd.Series(self.all_losses).to_csv(os.path.join(self.losses_folder, f"losses-{milestone}.csv"))
+        cols = ["step", "policy_loss", "value_loss", "total_loss"]
+        # Convert the train losses to a pd.DataFrame and save down the results
+        df = pd.DataFrame(self.train_losses, columns=cols)
+        df.to_csv(os.path.join(self.losses_folder, f"train-losses-{milestone}.csv"))
+        # Convert the validation losses to a pd.DataFrame and save down the results
+        df = pd.DataFrame(self.val_losses, columns=cols)
+        df.to_csv(os.path.join(self.losses_folder, f"val-losses-{milestone}.csv"))
 
     def load(self, milestone: int) -> None:
         """
@@ -321,7 +332,7 @@ class Trainer:
         self.model.to(self.device)  # Move the model to the correct device
         self.model.train()  # Make sure to set the model to train mode for training
 
-        inf_dataloader = infinite_loader(self.dataloader)  # This does not cache batches
+        inf_dataloader = infinite_loader(self.train_dataloader)  # This does not cache batches
         grad_norm = 0.0  # Set a default in-case no grad-norm is used for the progress bar
 
         if self.amp_dtype == torch.float16 and self.device == 'cuda':
@@ -382,14 +393,57 @@ class Trainer:
                 self.scheduler.step()  # Update the learning rate scheduler
 
                 # Aggregate all the loss values for each timestep, record separately for each
-                self.all_losses.append((policy_loss.item(), value_loss.item(), total_loss.item()))
+                self.train_losses.append((self.step, policy_loss.item(),
+                                          value_loss.item(), total_loss.item()))
                 self.step += 1
 
-                # Periodically save the model weights to disk
+                # Periodically run evaluation metrics on the validation data set, always on the last iter too
+                if self.step % self.eval_every == 0 or self.step == self.train_num_steps:
+                    self.model.eval() # Set model to evaluation mode
+                    with torch.no_grad():
+                        n_obs_total, policy_loss, value_loss = 0.0, 0.0, 0.0
+                        for batch in self.val_dataloader:
+                            state_tensors = batch["state_tensors"].to(self.device, non_blocking=True)
+                            value_tgt = batch["value_tgt"].to(self.device, non_blocking=True)
+                            policy_tgt = batch["policy_tgt"].to(self.device, non_blocking=True)
+                            n_obs = len(state_tensors) # Total number of obs in this batch
+                            n_obs_total += n_obs # Aggregate the total nobs seen
+
+                            if self.amp_dtype is not None:
+                                with torch.autocast(device_type=self.device, dtype=self.amp_dtype):
+                                    policy_logits, value_est = self.model(state_tensors)
+                                    if mask_illegal_moves:  # If True, mask out illegal moves from the policy
+                                        # logits with -np.inf so that the model does not get penalized for
+                                        # giving them prob mass
+                                        mask = self._get_legal_move_mask(batch["fen_states"],
+                                                                         self.move_uci_to_idx).to(self.device)
+                                        policy_logits = policy_logits.masked_fill(~mask, float('-inf'))
+                                    policy_loss += policy_loss_fn(policy_logits, policy_tgt).item() * n_obs
+                                    value_loss += value_loss_fn(value_est, value_tgt).item() * n_obs
+                            else:
+                                policy_logits, value_est = self.model(state_tensors)
+                                if mask_illegal_moves:  # If True, mask out illegal moves from the policy
+                                    # logits with -np.inf so that the model does not get penalized for giving
+                                    # them prob mass
+                                    mask = self._get_legal_move_mask(batch["fen_states"],
+                                                                     self.move_uci_to_idx).to(self.device)
+                                    policy_logits = policy_logits.masked_fill(~mask, float('-inf'))
+                                policy_loss += policy_loss_fn(policy_logits, policy_tgt).item() * n_obs
+                                value_loss += value_loss_fn(value_est, value_tgt).item() * n_obs
+
+                        # Normalize the sum of policy and value losses by total obs in the validation set
+                        policy_loss, value_loss= policy_loss / n_obs, value_loss / n_obs
+                        total_loss = policy_loss + value_loss * lambda_val
+                        self.val_losses.append((self.step, policy_loss, value_loss, total_loss))
+                    self.model.train() # Set model back to train mode
+
+
+                # Periodically save the model weights to disk, always on the last iter too
                 if self.step % self.save_every == 0 or self.step == self.train_num_steps:
                     self.save(self.step)
-                    self.all_losses = []  # Clear the list of losses after each save, store only the ones
-                    # from the last save to the next save
+                    # Clear the list of losses after each save, store only the ones from the last save to
+                    # the next save
+                    self.train_losses, self.val_losses = [], []
                     torch.cuda.empty_cache()
 
                 del policy_logits, value_est, policy_loss, value_loss, total_loss
