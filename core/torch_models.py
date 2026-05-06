@@ -1,6 +1,6 @@
 """
 This module builds off the classes contained in core.base_components.py and defines a class instance for 3
-different value-estimator modeling approachs:
+different value-estimator modeling approaches:
     1. A multi-layer perceptron (MLP) neural network
     2. A CNN-based neural network
     3. A transformer-based model
@@ -23,6 +23,7 @@ from typing import Tuple, List, Dict
 from dask.distributed import Variable
 
 torch.backends.mkldnn.enabled = True  # Usually enabled, but set to be sure
+
 
 ##################################################
 ### Pre-Training Material Heuristic Definition ###
@@ -71,7 +72,7 @@ class ResBlockMLP(nn.Module):
         h = self.fc2(h)
         return self.activation(x + h)
 
-
+## TODO: This needs to be re-worked
 class MLP(nn.Module):
     """
     Implementation of a multi-layer perceptron (MLP) / fully-connected neural network (FCNN) model for chess
@@ -85,7 +86,7 @@ class MLP(nn.Module):
 
         The input to this network will be a batch of FEN string state representation of the current game
         state and output a torch.Tensor of the same length detailing the model's value estimates for each
-        input state. All trainable parameters are contained witihn self.model.
+        input state. All trainable parameters are contained within self.model.
         """
         super().__init__()
         input_shape = 8 * 8 * 6 + 4 + 1  # 8 rows, 8 cols, 6 piece types, -1, 0, 1 values denoting a piece as
@@ -197,9 +198,9 @@ class ResBlockCNN(nn.Module):
 
     def __init__(self, channels: int):
         super().__init__()
-        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(channels)
-        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(channels)
         self.activation = nn.LeakyReLU()
 
@@ -211,22 +212,26 @@ class ResBlockCNN(nn.Module):
 
 class CNN(nn.Module):
     """
-    Implementation of a convolutional neural network model for chess board value estimation.
+    Implementation of a convolutional neural network (CNN) model chess board value and policy estimation.
     """
 
     def __init__(self, *args, **kwargs):
         """
-        Initializes the required value network model as a convolutional neural network (CNN). This network
-        architecture follows a blend of various other resnet-based CNNs including the one from AlphaZero.
+        Initializes the required value and policy network model as a convolutional neural network (CNN). This
+        network architecture follows a blend of various other resnet-based CNNs including the one from
+        AlphaZero.
 
         The input to this network will be a batch of FEN string state representation of the current game
-        state and output a torch.Tensor of the same length detailing the model's value estimates for each
-        input state. All trainable parameters are contained witihn self.model.
+        state and the output will be 2 torch.Tensors:
+            A). A (batch_size, 1) value estimate for each board for the play to go next [-1, +1]
+            B). A (batch_size, 1968) policy vector of logits over all possible UCI moves
         """
         super().__init__()
-        self.model = nn.Sequential(
+
+        # 1). Begin with a shared backbone for both the policy and valid heads
+        self.backbone = nn.Sequential(
             # Conv2d Block 1
-            nn.Conv2d(in_channels=17, out_channels=64, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels=18, out_channels=64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64),
             nn.LeakyReLU(),  # (batch_size, 64, 8, 8)
             ResBlockCNN(64),  # (batch_size, 64, 8, 8)
@@ -242,7 +247,19 @@ class CNN(nn.Module):
             nn.BatchNorm2d(256),
             nn.LeakyReLU(),  # (batch_size, 256, 8, 8)
             ResBlockCNN(256),  # (batch_size, 256, 8, 8)
+        )  # Output: (batch_size, 256, 8, 8)
 
+        # 2). Add a policy head sub-component that will operate off the input features from self.backbone
+        self.policy_head = nn.Sequential(
+            nn.Conv2d(in_channels=256, out_channels=2, kernel_size=1),  # 1x1 conv to compress channels
+            nn.BatchNorm2d(2),
+            nn.LeakyReLU(),
+            nn.Flatten(),  # (batch_size, 2*8*8) = (batch_size, 128)
+            nn.Linear(128, 1968)  # 1968 possible UCI moves
+        )  # Output: (batch_size, 1968) - returns raw logits, no softmax applied here
+
+        # 3). Add a value head sub-component that will operate off the input features from self.backbone
+        self.value_head = nn.Sequential(
             # Dense fully-connected Block 4
             nn.Flatten(),  # (batch_size, 256, 8, 8) -> (batch_size, 16384)
             nn.Linear(256 * 8 * 8, 256),  # (batch_size, 16384) -> (batch_size, 256)
@@ -250,9 +267,9 @@ class CNN(nn.Module):
             nn.Linear(256, 128),  # (batch_size, 128) -> (batch_size, 64)
             nn.LeakyReLU(),
             nn.Linear(128, 1),  # (batch_size, 128) -> (batch_size, 1)
+            # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
             nn.Tanh()
-        )  # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
-        self.device = next(self.model.parameters()).device.type
+        )  # Output: (batch_size, 1)
 
     @staticmethod
     def state_to_model_input(state_batch: List[str]) -> torch.Tensor:
@@ -268,21 +285,22 @@ class CNN(nn.Module):
             4. Location of friendly rooks encoded with 1s
             5. Location of friendly queens encoded with 1s
             6. Location of friendly king encoded with a 1
-            7. - 12. Location of foe pawns, knights, biships, rooks, queens, king
+            7. - 12. Location of foe pawns, knights, bishops, rooks, queens, king
             13. If player's side can king-side castle (all 1s if yes, otherwise 0s)
             14. If player's side can queen-side castle (all 1s if yes, otherwise 0s)
             15. & 16. Same for opponent's king-side and queen-side castling rights
-            17. Fifty-move rule counter - Encodes the number of half-moves since last capture or pawn move
+            17. En-Passant square - Encodes a 1 in a cell where an en passant capture move can be made if any
+            18. Fifty-move rule counter - Encodes the number of half-moves since last capture or pawn move
 
         Locationally, the friendly pieces are always shown at the bottom of the board and foe pieces always
-        are shown at the top of the board. Therefore, there is some board flipping depending on the color
+        are shown at the top of the board. Therefore, there is some board flipping depending on the color of
         whose move it is next so that the model learns the same chess playing from the same perspective.
 
         :param state_batch: A batch of FEN states as a list of strings.
         :return: A torch.Tensor of size (batch_size, 17, 8, 8)
         """
         sym_to_int = {s: i for i, s in enumerate("pnbrqk")}  # Mapping from symbol e.g. "b" to index e.g. 2
-        output = torch.zeros((len(state_batch), 17, 8, 8))  # 17 channels, 8 rows, 8 cols
+        output = torch.zeros((len(state_batch), 18, 8, 8))  # 18 channels, 8 rows, 8 cols
 
         for i, state in enumerate(state_batch):  # Add each state in the batch to the output torch.Tensor
             board = chess.Board(state)  # Use the FEN string encoding to create the board
@@ -293,19 +311,22 @@ class CNN(nn.Module):
                 # move, we will flip the columns only so that cell 64 (h8) maps to the bottom left corner. On
                 # white's move, we will flip the rows only so that cell 0 (a1) maps to the bottom left corner
                 if board.turn:  # White's turn to move
-                    r = 7 - r  # Reverse the row order
+                    r = 7 - r  # Reverse the row order so that (0, 0) is in the bottom left corner instead of
+                    # the top left corner of the grid representation
                 else:  # Black's turn to move
-                    c = 7 - c  # Reverse the col order
+                    c = 7 - c  # Reverse the col order, no need to reverse the row ordering since it already
+                    # has the black pieces in the last row of the board, but the cols need reversing so that
+                    # the king is in the correct position from black's perspective
+
                 p = sym_to_int[piece.symbol().lower()]  # Convert from piece symbol (str) to integer [0, 5]
                 if board.turn:  # If it is white's move, then upper-case (white) are the player's pieces
-                    # which we will record in the indcies [0, 5] of the third dimension
+                    # which we will record in the indices [0, 5] of the third dimension
                     p = p + (6 if piece.symbol().islower() else 0)
                 else:  # If it is black's move, then upper-case (white) pieces are the opponent's
                     p = p + (0 if piece.symbol().islower() else 6)
                 output[i, p, r, c] = 1  # Record using one-hot-encoding
 
             # Add additional plates for encoding other important state information
-
             # A). Add castling rights on the king and queen side for friendly and foe
             if board.turn is chess.WHITE:  # If it is white's turn, then white is friendly and black is foe
                 friendly_color, foe_color = chess.WHITE, chess.BLACK
@@ -317,27 +338,46 @@ class CNN(nn.Module):
             output[i, 14, :, :] = 1 if board.has_kingside_castling_rights(foe_color) else 0
             output[i, 15, :, :] = 1 if board.has_queenside_castling_rights(foe_color) else 0
 
-            # B). 50 move rule counter - Encodes the number of half-moves since last capture or pawn move
-            # when this counter reaches 100, then 50 whole moves have been made and the game ends in a draw
-            output[i, 16, :, :] = min(board.halfmove_clock, 100) / 100.0  # Scale to be [0, 1]
+            # B). Add en passant rights as well as an 18th plane if there are any
+            if board.ep_square:  # Will be None if no en passant is possible, there is at most 1 en passant
+                # on the board at any given time, it must immediately follow a pawn 2-cell jump
+                ep_r, ep_c = divmod(board.ep_square, 8)
+                # Apply the same perspective flip as for pieces
+                if board.turn:  # White's turn
+                    ep_r = 7 - ep_r
+                else:  # Black's turn
+                    ep_c = 7 - ep_c
+                output[i, 16, ep_r, ep_c] = 1
 
-        # Move the model_input to the required device so it can be run through the network before returning
+            # C). 50 move rule counter - Encodes the number of half-moves since last capture or pawn move
+            # when this counter reaches 100, then 50 whole moves have been made and the game ends in a draw
+            output[i, 17, :, :] = min(board.halfmove_clock, 100) / 100.0  # Scale to be [0, 1]
+
         return output
 
-    def forward(self, state_batch: List[str]) -> torch.Tensor:
+    def forward(self, state_batch: List[str]) -> Tuple[torch.Tensor]:
         """
-        Forward pass through the model which generates a value estimate of the current board position for
-        each state observation in the input state_batch i.e. an estimate of the expected reward from the
-        current state position.
+        Forward pass through the model which generates a policy logit vector over all moves and a value
+        estimate of the current board position for each input state observation in the input state_batch
+        i.e. an estimate of what the best move would be to play next among all possible moves and also
+        the expected reward from the perspective of the player to go next.
 
         :param state_batch: A batch of FEN states as a list of strings.
-        :return: A torch.Tensor of size (batch_size, ) with the value estimates for each stating position.
+        :return: A tuple of torch.Tensors:
+            policy_logits of size (batch_size, 1968)
+            value_estimates of size (batch_size, )
         """
-        if len(state_batch) > 0:
+        device = next(self.parameters()).device  # Get the appropriate device
+        if len(state_batch) == 0:  # For an empty input state_batch of length 0, return outputs of 0s
+            return torch.zeros(0, 1968).to(device), torch.zeros(0).to(device)
+        else:
             # Convert the input board into the expected state representation and pass it through the network
-            return self.model(self.state_to_model_input(state_batch).to(self.device)).squeeze(1)
-        else:  # If an empty batch is passed, return an empty torch.Tensor
-            return torch.zeros(0).to(self.device)
+            x = self.state_to_model_input(state_batch).to(device)
+            features = self.backbone(x)  # Get the shared deep latent features (batch_size, 256, 8, 8)
+            # Pass these shared features to the policy and value sub-components to compute outputs
+            policy_logits = self.policy_head(features)  # (batch_size, 1968)
+            value_estimates = self.value_head(features).suqeeze(1)  # (batch_size, )
+            return policy_logits, value_estimates
 
 
 ############################################
@@ -345,7 +385,7 @@ class CNN(nn.Module):
 ############################################
 # TODO: Section marker
 
-
+## TODO: This needs to be re-worked
 class TransformerModel(nn.Module):
     """
     Implementation of a multi-headed self-attention transformer model for chess board value estimation.
@@ -381,7 +421,7 @@ class TransformerModel(nn.Module):
                                                         dim_feedforward=self.ff_dim, activation="relu",
                                                         batch_first=True, norm_first=False, bias=True)
         self.encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=self.num_layers,
-                                             norm=nn.LayerNorm(self.hidden_size))
+                                              norm=nn.LayerNorm(self.hidden_size))
         self.proj = nn.Linear(self.embed_size, 1)  # Final linear projection after pooling to 1 output value
         self.device = next(self.encoder.parameters()).device.type
 
@@ -758,6 +798,6 @@ def _load_worker_model(config: Dict) -> nn.Module:
             v_network.model.load_state_dict(model_weights)
 
     device = get_device()
-    v_network = v_network.to(device) # Move this model to the GPU is available
+    v_network = v_network.to(device)  # Move this model to the GPU is available
     v_network.device = device  # Update the device of the model after moving it
     return v_network
