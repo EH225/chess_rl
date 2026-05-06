@@ -14,12 +14,12 @@ output:
     clear_all: False # If set to True, then the output_path is cleared at the start, deletes existing results
 
 pretrain: # Specifies the supervised pre-training parameters
-    batch_size: 256
+    batch_size: 2048
     lr_start: 1.0e-3
-    lr_end: 1.0e-5
+    lr_end: 1.0e-6
     weight_decay: 1.0e-2
-    train_num_steps: 10000
+    train_num_steps: 400000
     grad_clip: 1.0
-    save_every: 5000
+    save_every: 50000
     use_amp: True
     use_latest_checkpoint: True
