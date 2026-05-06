@@ -100,7 +100,7 @@ class SupervisedPretrainingDataset(Dataset):
         """
         return {
             "fen_states": self.dataset.loc[idx, "fen"],
-            "boards": self.state_to_model_input([self.dataset.loc[idx, "fen"]]).squeeze(0),
+            "state_tensors": self.state_to_model_input([self.dataset.loc[idx, "fen"]]).squeeze(0),
             "value_tgt": torch.tensor(self.dataset.loc[idx, "value_tgt"], dtype=torch.float32),
             "policy_tgt": torch.tensor(self.dataset.loc[idx, "policy_tgt"], dtype=torch.long),
         }
@@ -332,7 +332,7 @@ class Trainer:
             while self.step < self.train_num_steps:  # Run until all training iterations are complete
                 # Get the next training batch and move it to the same device as the model
                 batch = next(inf_dataloader)
-                boards = batch["boards"].to(self.device, non_blocking=True)
+                state_tensors = batch["state_tensors"].to(self.device, non_blocking=True)
                 value_tgt = batch["value_tgt"].to(self.device, non_blocking=True)
                 policy_tgt = batch["policy_tgt"].to(self.device, non_blocking=True)
 
@@ -341,7 +341,7 @@ class Trainer:
                 # along the first 2 dims as captions but also gives the prob dist across the vocab
                 if self.amp_dtype is not None:
                     with torch.autocast(device_type=self.device, dtype=self.amp_dtype):
-                        policy_logits, value_est = self.model(boards)
+                        policy_logits, value_est = self.model(state_tensors)
                         value_est = value_est.squeeze(1)
                         if mask_illegal_moves:  # If True, mask out illegal moves from the policy logits with
                             # -np.inf so that the model does not get penalized for giving them prob mass
@@ -352,7 +352,7 @@ class Trainer:
                         value_loss = value_loss_fn(value_est, value_tgt)
                         total_loss = policy_loss + value_loss * lambda_val
                 else:
-                    policy_logits, value_est = self.model(boards)
+                    policy_logits, value_est = self.model(state_tensors)
                     value_est = value_est.squeeze(1)
                     if mask_illegal_moves:  # If True, mask out illegal moves from the policy logits with
                         # -np.inf so that the model does not get penalized for giving them prob mass

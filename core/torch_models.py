@@ -372,7 +372,10 @@ class CNN(nn.Module):
             return torch.zeros(0, 1968).to(device), torch.zeros(0).to(device)
         else:
             # Convert the input board into the expected state representation and pass it through the network
-            x = self.state_to_model_input(state_batch).to(device)
+            if isinstance(state_batch, list):
+                x = self.state_to_model_input(state_batch).to(device)
+            elif isinstance(state_batch, torch.Tensor): # Skip the conversion if already done
+                x = state_batch.to(device)
             features = self.backbone(x)  # Get the shared deep latent features (batch_size, 256, 8, 8)
             # Pass these shared features to the policy and value sub-components to compute outputs
             policy_logits = self.policy_head(features)  # (batch_size, 1968)
