@@ -342,7 +342,6 @@ class Trainer:
                 if self.amp_dtype is not None:
                     with torch.autocast(device_type=self.device, dtype=self.amp_dtype):
                         policy_logits, value_est = self.model(state_tensors)
-                        value_est = value_est.squeeze(1)
                         if mask_illegal_moves:  # If True, mask out illegal moves from the policy logits with
                             # -np.inf so that the model does not get penalized for giving them prob mass
                             mask = self._get_legal_move_mask(batch["fen_states"],
@@ -353,7 +352,6 @@ class Trainer:
                         total_loss = policy_loss + value_loss * lambda_val
                 else:
                     policy_logits, value_est = self.model(state_tensors)
-                    value_est = value_est.squeeze(1)
                     if mask_illegal_moves:  # If True, mask out illegal moves from the policy logits with
                         # -np.inf so that the model does not get penalized for giving them prob mass
                         mask = self._get_legal_move_mask(batch["fen_states"],
