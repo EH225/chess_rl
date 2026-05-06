@@ -15,9 +15,9 @@ output:
 
 pretrain: # Specifies the supervised pre-training parameters
     batch_size: 256
-    lr_start: 1e-3
-    lr_end: 1e-5
-    weight_decay: 1e-2
+    lr_start: 1.0e-3
+    lr_end: 1.0e-5
+    weight_decay: 1.0e-2
     train_num_steps: 10000
     grad_clip: 1.0
     save_every: 5000

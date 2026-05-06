@@ -209,7 +209,15 @@ class Trainer:
         self.dataloader = dataloader
 
         # Configure the optimizer for training
-        self.opt = AdamW(self.model.parameters(), lr=lr_start, betas=adam_betas, weight_decay=weight_decay)
+        decay_params = [p for n, p in model.named_parameters()
+                        if p.requires_grad and not any(nd in n for nd in ['bias', 'bn'])]
+        no_decay_params = [p for n, p in model.named_parameters()
+                           if p.requires_grad and any(nd in n for nd in ['bias', 'bn'])]
+
+        self.opt = torch.optim.AdamW([
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': no_decay_params, 'weight_decay': 0.0}
+            ], lr=lr_start, betas=adam_betas)
 
         warmup_steps = 5000  # Slowly ramp up the learning rate from very low to peak
         warmup = LinearLR(self.opt, start_factor=0.01, end_factor=1.0, total_iters=warmup_steps)
