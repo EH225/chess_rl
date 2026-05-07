@@ -467,13 +467,19 @@ def run_pretraining(config_name: str) -> None:
     model = model_class(config)  # Init the model using the config file
 
     # 3). Define other inputs required for training
-    dataset_path = os.path.join(CURRENT_DIR, "pretrain_dset.parquet")
-    dataloader = get_dataloader(batch_size=config['pretrain']['batch_size'], dataset_path=dataset_path,
-                                state_to_model_input=model.state_to_model_input)
+    train_dataset_path = os.path.join(CURRENT_DIR, "pretrain_dset_train.parquet")
+    train_dataloader = get_dataloader(batch_size=config['pretrain']['batch_size'],
+                                      dataset_path=train_dataset_path,
+                                      state_to_model_input=model.state_to_model_input)
+
+    val_dataset_path = os.path.join(CURRENT_DIR, "pretrain_dset_val.parquet")
+    val_dataloader = get_dataloader(batch_size=config['pretrain']['batch_size'],
+                                    dataset_path=val_dataset_path,
+                                    state_to_model_input=model.state_to_model_input)
 
     # 4). Train the model using the Trainer class defined above
-    trainer = Trainer(model=model, dataloader=dataloader, results_folder=config["output"]["pretrain_path"],
-                      **config["pretrain"])
+    trainer = Trainer(model=model, train_dataloader=train_dataloader, val_dataloader=val_dataloader,
+                      results_folder=config["output"]["pretrain_path"], **config["pretrain"])
     trainer.train()
 
 
