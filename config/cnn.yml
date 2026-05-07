@@ -21,6 +21,6 @@ pretrain: # Specifies the supervised pre-training parameters
     train_num_steps: 75000
     grad_clip: 1.0
     eval_every: 5000
-    save_every: 25000
+    save_every: 5000
     use_amp: True
     use_latest_checkpoint: True

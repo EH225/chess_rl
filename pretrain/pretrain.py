@@ -432,7 +432,7 @@ class Trainer:
                                 value_loss += value_loss_fn(value_est, value_tgt).item() * n_obs
 
                         # Normalize the sum of policy and value losses by total obs in the validation set
-                        policy_loss, value_loss= policy_loss / n_obs, value_loss / n_obs
+                        policy_loss, value_loss= policy_loss / n_obs_total, value_loss / n_obs_total
                         total_loss = policy_loss + value_loss * lambda_val
                         self.val_losses.append((self.step, policy_loss, value_loss, total_loss))
                     self.model.train() # Set model back to train mode
