@@ -119,11 +119,11 @@ def get_dataloader(batch_size: int, dataset_path: str, state_to_model_input: Cal
     device = get_device()  # Auto-detect the available hardware
     dataset = SupervisedPretrainingDataset(dataset_path, state_to_model_input)
     if device == "cuda":
-        num_workers, pin_memory, persistent_workers = 4, True, True
+        num_workers, pin_memory, persistent_workers = os.cpu_count(), True, True
     else:
         num_workers, pin_memory, persistent_workers = 0, False, False
     return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
-                      pin_memory=pin_memory, persistent_workers=persistent_workers, prefetch_factor=16)
+                      pin_memory=pin_memory, persistent_workers=persistent_workers, prefetch_factor=4)
 
 
 def infinite_loader(dataloader: DataLoader):
