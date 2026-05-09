@@ -278,7 +278,7 @@ class CNN(nn.Module):
         representations for this model (torch.Tensor) and moves the data to the same device as this model.
 
         This CNN model operates on board representations that are [(12 + 4 + 1 + 1 + 1), 8, 8]
-        or [17, 8, 8] in total. The meaning of each plate (channel) input is as follows:
+        or [18, 8, 8] in total. The meaning of each plate (channel) input is as follows:
             1. Location of friendly pawns encoded with 1s
             2. Location of friendly knights encoded with 1s
             3. Location of friendly bishops encoded with 1s

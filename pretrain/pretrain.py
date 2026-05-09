@@ -399,6 +399,8 @@ class Trainer:
 
                 # Periodically run evaluation metrics on the validation data set, always on the last iter too
                 if self.step % self.eval_every == 0 or self.step == self.train_num_steps:
+                    # On the last step, we will run an eval analysis, cache the final model's predictions too
+                    cache_val_pred = self.step == self.train_num_steps
                     self.model.eval() # Set model to evaluation mode
                     with torch.no_grad():
                         n_obs_total, policy_loss, value_loss = 0.0, 0.0, 0.0
@@ -435,8 +437,8 @@ class Trainer:
                         policy_loss, value_loss= policy_loss / n_obs_total, value_loss / n_obs_total
                         total_loss = policy_loss + value_loss * lambda_val
                         self.val_losses.append((self.step, policy_loss, value_loss, total_loss))
-                    self.model.train() # Set model back to train mode
 
+                    self.model.train() # Set model back to train mode
 
                 # Periodically save the model weights to disk, always on the last iter too
                 if self.step % self.save_every == 0 or self.step == self.train_num_steps:
