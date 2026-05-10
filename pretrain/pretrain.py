@@ -170,7 +170,8 @@ class Trainer:
             directory will be loaded in before training begins to pick up from where it was last left off.
         :param reset_lr_scheduler: If set to True, then the learning rate scheduler is reset if the load
             method is called. This allows us to continue training further by configuring a new learning rate
-            annealing scheduler.
+            annealing scheduler. Note, this makes it so that we do not have a learning rate warm-up. For
+            continuity with prior training, it is recommended that the new lr_start == prior lr_end.
         """
         super().__init__()
 
@@ -227,14 +228,20 @@ class Trainer:
             {'params': no_decay_params, 'weight_decay': 0.0}
             ], lr=lr_start, betas=adam_betas)
 
-        warmup_steps = 5000  # Slowly ramp up the learning rate from very low to peak
-        warmup = LinearLR(self.opt, start_factor=0.01, end_factor=1.0, total_iters=warmup_steps)
-        # Linearly decay the learning rate during training
-        decay = LinearLR(self.opt, start_factor=1.0, end_factor=lr_end / lr_start,
-                         total_iters=train_num_steps - warmup_steps)
-        # Stack both the learning rate warm up and the gradual linear decay into 1 scheduler
-        self.scheduler = SequentialLR(self.opt, schedulers=[warmup, decay], milestones=[warmup_steps])
+
         self.reset_lr_scheduler = reset_lr_scheduler
+        self.lr_start, self.lr_end = lr_start, lr_end
+        if self.reset_lr_scheduler is False: # Create a warm-up period for the LR
+            warmup_steps = 5000  # Slowly ramp up the learning rate from very low to peak
+            warmup = LinearLR(self.opt, start_factor=0.01, end_factor=1.0, total_iters=warmup_steps)
+            # Linearly decay the learning rate during training
+            decay = LinearLR(self.opt, start_factor=1.0, end_factor=lr_end / lr_start,
+                             total_iters=train_num_steps - warmup_steps)
+            # Stack both the learning rate warm up and the gradual linear decay into 1 scheduler
+            self.scheduler = SequentialLR(self.opt, schedulers=[warmup, decay], milestones=[warmup_steps])
+        else: # Otherwise reset the learning rate scheduler and do not include a warm-up period
+            self.scheduler = LinearLR(self.opt, start_factor=1.0, end_factor=lr_end / lr_start,
+                                      total_iters=train_num_steps - warmup_steps)
 
         self.step = 0  # Training step counter
         self.train_losses, self.val_losses = [], []  # Aggregate loss values during training
@@ -245,6 +252,7 @@ class Trainer:
             if len(checkpoints) > 0:
                 last_checkpoint = max([int(x.replace("model-", "").replace(".pt", "")) for x in checkpoints])
                 self.load(last_checkpoint)  # Load in the most recent milestone to continue training
+
 
     def save(self, milestone: int) -> None:
         """
@@ -286,8 +294,12 @@ class Trainer:
         self.step = checkpoint_data["step"]
         self.model.load_state_dict(checkpoint_data["model"])
         self.opt.load_state_dict(checkpoint_data["opt"])
-        if self.reset_lr_scheduler is False:  # If True, do not load the prior learning rate scheduler state
+        if self.reset_lr_scheduler:  # If True, do not load the prior learning rate scheduler state
+            for g in self.opt.param_groups:  # Make sure the optimizer learning rates match the new scheduler
+                g["lr"] = self.lr_start
+        else: # If not resetting the LR scheduler, then load in the state dict to re-store it
             self.scheduler.load_state_dict(checkpoint_data["scheduler"])
+
         # Losses are not loaded in, they are saved to disk periodically with the model weights and are not
         # needed to continue training. The losses obtained by training will be cached again at the next save
 
@@ -296,6 +308,7 @@ class Trainer:
             for k, v in state.items():
                 if torch.is_tensor(v):
                     state[k] = v.to(self.device)
+
 
     def _get_legal_move_mask(self, state_batch: List[str], move_uci_to_idx: Dict) -> torch.Tensor:
         """
