@@ -24,3 +24,4 @@ pretrain: # Specifies the supervised pre-training parameters
     save_every: 5000
     use_amp: True
     use_latest_checkpoint: True
+    reset_lr_scheduler: True
