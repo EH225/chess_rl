@@ -147,7 +147,7 @@ class Trainer:
                  train_num_steps: int = 300000, adam_betas: Tuple[float] = (0.9, 0.99),
                  grad_clip: float = 1.0, eval_every: int = 5000, save_every: int = 10000,
                  results_folder: str = None, use_amp: bool = False, use_latest_checkpoint: bool = True,
-                 **kwargs):
+                 reset_lr_scheduler: bool = False, **kwargs):
         """
         This is a framework for training a deep policy-value network model. This class wrapper has methods
         for loading a model from a recent checkpoint, saving a model periodically during training, and
@@ -168,6 +168,9 @@ class Trainer:
         :param use_amp: Whether to use automatic mixed-precision type casting during training.
         :param use_latest_checkpoint: If set to True, then the latest checkpoint detected in the results
             directory will be loaded in before training begins to pick up from where it was last left off.
+        :param reset_lr_scheduler: If set to True, then the learning rate scheduler is reset if the load
+            method is called. This allows us to continue training further by configuring a new learning rate
+            annealing scheduler.
         """
         super().__init__()
 
@@ -231,6 +234,7 @@ class Trainer:
                          total_iters=train_num_steps - warmup_steps)
         # Stack both the learning rate warm up and the gradual linear decay into 1 scheduler
         self.scheduler = SequentialLR(self.opt, schedulers=[warmup, decay], milestones=[warmup_steps])
+        self.reset_lr_scheduler = reset_lr_scheduler
 
         self.step = 0  # Training step counter
         self.train_losses, self.val_losses = [], []  # Aggregate loss values during training
@@ -282,7 +286,8 @@ class Trainer:
         self.step = checkpoint_data["step"]
         self.model.load_state_dict(checkpoint_data["model"])
         self.opt.load_state_dict(checkpoint_data["opt"])
-        self.scheduler.load_state_dict(checkpoint_data["scheduler"])
+        if self.reset_lr_scheduler is False:  # If True, do not load the prior learning rate scheduler state
+            self.scheduler.load_state_dict(checkpoint_data["scheduler"])
         # Losses are not loaded in, they are saved to disk periodically with the model weights and are not
         # needed to continue training. The losses obtained by training will be cached again at the next save
 
@@ -399,8 +404,6 @@ class Trainer:
 
                 # Periodically run evaluation metrics on the validation data set, always on the last iter too
                 if self.step % self.eval_every == 0 or self.step == self.train_num_steps:
-                    # On the last step, we will run an eval analysis, cache the final model's predictions too
-                    cache_val_pred = self.step == self.train_num_steps
                     self.model.eval() # Set model to evaluation mode
                     with torch.no_grad():
                         n_obs_total, policy_loss, value_loss = 0.0, 0.0, 0.0
