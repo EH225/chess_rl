@@ -228,20 +228,15 @@ class Trainer:
             {'params': no_decay_params, 'weight_decay': 0.0}
             ], lr=lr_start, betas=adam_betas)
 
-
         self.reset_lr_scheduler = reset_lr_scheduler
         self.lr_start, self.lr_end = lr_start, lr_end
-        if self.reset_lr_scheduler is False: # Create a warm-up period for the LR
-            warmup_steps = 5000  # Slowly ramp up the learning rate from very low to peak
-            warmup = LinearLR(self.opt, start_factor=0.01, end_factor=1.0, total_iters=warmup_steps)
-            # Linearly decay the learning rate during training
-            decay = LinearLR(self.opt, start_factor=1.0, end_factor=lr_end / lr_start,
-                             total_iters=train_num_steps - warmup_steps)
-            # Stack both the learning rate warm up and the gradual linear decay into 1 scheduler
-            self.scheduler = SequentialLR(self.opt, schedulers=[warmup, decay], milestones=[warmup_steps])
-        else: # Otherwise reset the learning rate scheduler and do not include a warm-up period
-            self.scheduler = LinearLR(self.opt, start_factor=1.0, end_factor=lr_end / lr_start,
-                                      total_iters=train_num_steps - warmup_steps)
+        warmup_steps = 5000  # Slowly ramp up the learning rate from very low to peak
+        warmup = LinearLR(self.opt, start_factor=0.01, end_factor=1.0, total_iters=warmup_steps)
+        # Linearly decay the learning rate during training
+        decay = LinearLR(self.opt, start_factor=1.0, end_factor=lr_end / lr_start,
+                         total_iters=train_num_steps - warmup_steps)
+        # Stack both the learning rate warm up and the gradual linear decay into 1 scheduler
+        self.scheduler = SequentialLR(self.opt, schedulers=[warmup, decay], milestones=[warmup_steps])
 
         self.step = 0  # Training step counter
         self.train_losses, self.val_losses = [], []  # Aggregate loss values during training
@@ -295,8 +290,15 @@ class Trainer:
         self.model.load_state_dict(checkpoint_data["model"])
         self.opt.load_state_dict(checkpoint_data["opt"])
         if self.reset_lr_scheduler:  # If True, do not load the prior learning rate scheduler state
+            print("HERE!")
             for g in self.opt.param_groups:  # Make sure the optimizer learning rates match the new scheduler
                 g["lr"] = self.lr_start
+
+            # Instead of loading the prior learning rate scheduler from disk, create a new one according to
+            # the new config provided to continue traing after the prior end
+            self.scheduler = LinearLR(self.opt, start_factor=1.0, end_factor=self.lr_end / self.lr_start,
+                                      total_iters=self.train_num_steps - self.step)
+
         else: # If not resetting the LR scheduler, then load in the state dict to re-store it
             self.scheduler.load_state_dict(checkpoint_data["scheduler"])
 
@@ -337,6 +339,9 @@ class Trainer:
         :param mask_illegal_moves: If set to True, then illegal moves are masked with -inf in the policy
             logit model outputs so that probability mass given to illegal moves is not penalized.
         """
+        for g in self.opt.param_groups:
+            print(f"LR after load: {g['lr']}")
+
         msg = f"Starting Training, device={self.device}, amp_dtype={self.amp_dtype}, lambda_val={lambda_val}"
         self.logger.info(msg)
         for i, param_group in enumerate(self.opt.param_groups):  # Report the learning rate and weight decay
