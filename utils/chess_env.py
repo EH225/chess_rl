@@ -10,6 +10,7 @@ sys.path.insert(0, PARENT_DIR)
 import numpy as np
 from typing import Tuple, Dict, Union, List
 import os, chess, cv2, io, chess.svg, cairosvg
+from utils.general import create_move_to_idx_map
 from PIL import Image
 
 
@@ -241,6 +242,7 @@ class ChessEnv:
         self.record_dir = record_dir if record_dir is not None else os.path.join(PARENT_DIR, "recordings/")
         os.makedirs(self.record_dir, exist_ok=True)  # Make the recordings save directory if needed
         self.ep_ended = self.board.is_game_over()  # Keep track of if the episode has now ended
+        self.move_to_idx = create_move_to_idx_map()
 
     def reset(self) -> np.ndarray:
         """
@@ -299,6 +301,16 @@ class ChessEnv:
         self.step_count -= 1
         self.ep_ended = False  # If the last action ended the episode, then undoing it will reverse that
         return self.board.fen()
+
+    def get_move_idx(self, action_idx: int) -> int:
+        """
+        Returns an int [0, 1967] denoting the index of the action_idx.
+
+        :param action_idx: An index integer that index the legal actions of the current board.
+        :returns: The int [0, 1967] denoting the index of this move in the broader full UCI move universe.
+        """
+        uci_move_str = str(list(self.board.legal_moves)[action_idx])
+        return self.move_to_idx[uci_move_str]
 
     def __repr__(self):
         """

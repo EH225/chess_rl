@@ -21,54 +21,9 @@ from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import SequentialLR, LinearLR
 from utils.general import get_device, get_amp_dtype
 from core.torch_models import MLP, CNN, Transformer
-from utils.general import read_yaml
+from utils.general import read_yaml, create_move_to_idx_map
 
 
-def create_move_to_int_map() -> Dict:
-    """
-    Creates a mapping between UCI moves e.g. "a1a2" or "f6f7q" denoting a to-from grid cell pairing
-    with a unique integer value. There are 1968 in total.
-
-    :returns: A length 1968 dictionary of all possible UCI moves and their associated integer indices starting
-        at 0 and going to 1967.
-    """
-    files, ranks = 'abcdefgh', '12345678'
-    uci_moves = []
-
-    # Queen (q_dirs) directions covers the movement patterns of all pieces on the board except knights
-    q_dirs = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
-    # Knight (k_dirs) gives us the other possible movement patterns
-    k_dirs = [(1, 2), (1, -2), (-1, 2), (-1, -2), (2, 1), (2, -1), (-2, 1), (-2, -1)]
-    promos = ['n', 'b', 'r', 'q']  # All the possible pieces that a pawn can be promoted into
-
-    for r in range(8):  # Iterate over all ranks (rows) on the board
-        for f in range(8):  # Iterate over all files (cols) on the board
-            start = files[f] + ranks[r]  # Create the starting position e.g. a1
-
-            # 1. Consider moves in the Queen planes (56)
-            for df, dr in q_dirs:
-                for dist in range(1, 8):
-                    f2, r2 = f + df * dist, r + dr * dist
-                    if 0 <= f2 < 8 and 0 <= r2 < 8:
-                        move = start + files[f2] + ranks[r2]  # e.g. a1a2
-                        uci_moves.append(move)
-
-            # 2. Consider moves in the Knight planes (8)
-            for df, dr in k_dirs:
-                f2, r2 = f + df, r + dr
-                if 0 <= f2 < 8 and 0 <= r2 < 8:
-                    uci_moves.append(start + files[f2] + ranks[r2])
-
-            # 3. Consider promotion moves as well
-            for r_start, r_end in [(6, 7), (1, 0)]:  # Can only promote on the first or last row
-                if r == r_start:
-                    for df in [-1, 0, 1]:  # Promotion can be by vertical movement or diagonal capture
-                        f2 = f + df
-                        if 0 <= f2 < 8:
-                            for p in promos:
-                                uci_moves.append(start + files[f2] + ranks[r_end] + p)
-
-    return {m: i for i, m in enumerate(uci_moves)}
 
 
 class SupervisedPretrainingDataset(Dataset):
@@ -240,7 +195,7 @@ class Trainer:
 
         self.step = 0  # Training step counter
         self.train_losses, self.val_losses = [], []  # Aggregate loss values during training
-        self.move_uci_to_idx = create_move_to_int_map()  # Create a mapping from uci move to integer
+        self.move_uci_to_idx = create_move_to_idx_map()  # Create a mapping from uci move to integer
 
         if use_latest_checkpoint:
             checkpoints = os.listdir(self.checkpoints_folder)
@@ -290,7 +245,6 @@ class Trainer:
         self.model.load_state_dict(checkpoint_data["model"])
         self.opt.load_state_dict(checkpoint_data["opt"])
         if self.reset_lr_scheduler:  # If True, do not load the prior learning rate scheduler state
-            print("HERE!")
             for g in self.opt.param_groups:  # Make sure the optimizer learning rates match the new scheduler
                 g["lr"] = self.lr_start
 
@@ -339,9 +293,6 @@ class Trainer:
         :param mask_illegal_moves: If set to True, then illegal moves are masked with -inf in the policy
             logit model outputs so that probability mass given to illegal moves is not penalized.
         """
-        for g in self.opt.param_groups:
-            print(f"LR after load: {g['lr']}")
-
         msg = f"Starting Training, device={self.device}, amp_dtype={self.amp_dtype}, lambda_val={lambda_val}"
         self.logger.info(msg)
         for i, param_group in enumerate(self.opt.param_groups):  # Report the learning rate and weight decay

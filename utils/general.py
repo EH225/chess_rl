@@ -6,13 +6,60 @@ import time, sys, logging, yaml, os
 import numpy as np
 import pandas as pd
 import socket, torch
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 import matplotlib
 
 matplotlib.use("agg")
 import matplotlib.pyplot as plt
 
 logging.getLogger("matplotlib.font_manager").disabled = True
+
+
+def create_move_to_idx_map() -> Dict:
+    """
+    Creates a mapping between UCI moves e.g. "a1a2" or "f6f7q" denoting a to-from grid cell pairing
+    with a unique integer value. There are 1968 in total.
+
+    :returns: A length 1968 dictionary of all possible UCI moves and their associated integer indices starting
+        at 0 and going to 1967.
+    """
+    files, ranks = 'abcdefgh', '12345678'
+    uci_moves = []
+
+    # Queen (q_dirs) directions covers the movement patterns of all pieces on the board except knights
+    q_dirs = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+    # Knight (k_dirs) gives us the other possible movement patterns
+    k_dirs = [(1, 2), (1, -2), (-1, 2), (-1, -2), (2, 1), (2, -1), (-2, 1), (-2, -1)]
+    promos = ['n', 'b', 'r', 'q']  # All the possible pieces that a pawn can be promoted into
+
+    for r in range(8):  # Iterate over all ranks (rows) on the board
+        for f in range(8):  # Iterate over all files (cols) on the board
+            start = files[f] + ranks[r]  # Create the starting position e.g. a1
+
+            # 1. Consider moves in the Queen planes (56)
+            for df, dr in q_dirs:
+                for dist in range(1, 8):
+                    f2, r2 = f + df * dist, r + dr * dist
+                    if 0 <= f2 < 8 and 0 <= r2 < 8:
+                        move = start + files[f2] + ranks[r2]  # e.g. a1a2
+                        uci_moves.append(move)
+
+            # 2. Consider moves in the Knight planes (8)
+            for df, dr in k_dirs:
+                f2, r2 = f + df, r + dr
+                if 0 <= f2 < 8 and 0 <= r2 < 8:
+                    uci_moves.append(start + files[f2] + ranks[r2])
+
+            # 3. Consider promotion moves as well
+            for r_start, r_end in [(6, 7), (1, 0)]:  # Can only promote on the first or last row
+                if r == r_start:
+                    for df in [-1, 0, 1]:  # Promotion can be by vertical movement or diagonal capture
+                        f2 = f + df
+                        if 0 <= f2 < 8:
+                            for p in promos:
+                                uci_moves.append(start + files[f2] + ranks[r_end] + p)
+
+    return {m: i for i, m in enumerate(uci_moves)}
 
 
 def compute_img_out_dim(input_dims: Tuple[int], kernel_size: int, padding: int = 0, dilation: int = 1,

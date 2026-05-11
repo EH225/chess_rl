@@ -1,7 +1,6 @@
 """
-This module builds off the classes contained in core/base_components and defines a class instance for a linear
-deep Q-network and a CNN-based deep Q-network that replicates the network architecture of the Google DeepMind
-model published in Nature.
+This module defines search algorithms used to increase the performance of models by allowing the model to
+contemplate future moves before selecting one from the current state.
 """
 from __future__ import annotations
 import sys, os
@@ -13,9 +12,12 @@ sys.path.insert(0, PARENT_DIR)
 import numpy as np
 import torch, chess, time
 from utils.chess_env import ChessEnv, relative_material_diff
+from utils.general import create_move_to_idx_map, get_amp_dtype, get_device
 from scipy.special import softmax
 from typing import Tuple, List, Callable, Optional
 
+RNG = np.random.default_rng() # Random number generator, create it once and used it multiple times
+MOVE_TO_IDX = create_move_to_idx_map()
 
 ########################
 ### Helper Functions ###
@@ -55,35 +57,81 @@ def max_depth(node):
         return max([max_depth(child) + 1 for child in node.children])
 
 
-def material_heuristic(state: str) -> float:
+# def material_heuristic(state: str) -> float:
+#     """
+#     DEPRECIATED = USE relative_material_diff INSTEAD
+#     Computes a heuristic evaluation of state value based on net material from the perspective of the player
+#     whose turn is next according to the FEN state encoding.
+
+#     This is computed as the net material difference normalized to be [-1, 1] where each piece is worth:
+#         pawn (1), knight (3), bishop (3), rook (5), queen (9), king (0)
+
+#     The net material sum is divided by 39 since 1*8 + 3*2 + 3*2 + 5*2 + 9*1 = 39 which is close to the max
+#     possible material difference i.e. one side has only a king, the other has all starting pieces. Values
+#     are also clipped in case a players obtains additional high-value pieces e.g. queens via pawn promotion.
+
+#     :param state: A FEN string denoting the current game state.
+#     :return: A float value representing the approximate value of the board for the player to move next.
+#     """
+#     piece_values = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
+#     board = chess.Board(state)  # Convert to a chess.Board object to access the piece map
+#     net_material = 0
+#     for p in board.piece_map().values():
+#         piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece
+#         if board.turn is True and p.symbol().islower():  # For white, lower-case pieces are foes
+#             piece_val *= (-1)
+#         elif board.turn is False and p.symbol().isupper():  # For black, upper-case pieces are foes
+#             piece_val *= (-1)
+#         net_material += piece_val
+
+#     # 39 is the largest net material difference we expect, but clip at [-1, +1] to avoid outliers
+#     return np.clip(net_material / 39, -1, 1)
+
+########################
+### Null Search Algo ###
+########################
+# TODO: Section marker
+
+def null_search(state: str, model, **kwargs) -> Tuple[int, float, np.ndarray, Tuple[int]]:
     """
-    DEPRECIATED = USE relative_material_diff INSTEAD
-    Computes a heuristic evaluation of state value based on net material from the perspective of the player
-    whose turn is next according to the FEN state encoding.
-
-    This is computed as the net material difference normalized to be [-1, 1] where each piece is worth:
-        pawn (1), knight (3), bishop (3), rook (5), queen (9), king (0)
-
-    The net material sum is divided by 39 since 1*8 + 3*2 + 3*2 + 5*2 + 9*1 = 39 which is close to the max
-    possible material difference i.e. one side has only a king, the other has all starting pieces. Values
-    are also clipped in case a players obtains additional high-value pieces e.g. queens via pawn promotion.
+    Does not perform any searching, the input state is passed directly to the model and the results are then
+    used to select a move immediately. This search function is included so that frameworks that expect a
+    search algo to be used can call this one, even when no searching is desired (for speed).
 
     :param state: A FEN string denoting the current game state.
-    :return: A float value representing the approximate value of the board for the player to move next.
+    :param model: A model that produces a value estimate and policy logits for a given input state (i.e. FEN)
+        from the perspective of the player whose turn it is to go next.
+    :return:
+        - best_action (int): The best action found in the search process i.e. an int [0, 1967].
+        - state_value (float): The estimated terminal rewards [-1, +1] for the current player.
+        - action_values (np.ndarray): The estimated value of each possible next action.
+        - info (Tuple[int]): The total number of nodes evaluated, the max depth of the search tree and how
+            many terminal game state nodes were visited.
     """
-    piece_values = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9, "k": 0}
-    board = chess.Board(state)  # Convert to a chess.Board object to access the piece map
-    net_material = 0
-    for p in board.piece_map().values():
-        piece_val = piece_values[p.symbol().lower()]  # Get the absolute value of each piece
-        if board.turn is True and p.symbol().islower():  # For white, lower-case pieces are foes
-            piece_val *= (-1)
-        elif board.turn is False and p.symbol().isupper():  # For black, upper-case pieces are foes
-            piece_val *= (-1)
-        net_material += piece_val
+    env = ChessEnv(initial_state=state)  # Instantiate the current game state
+    if env.ep_ended:  # If the episode has already ended, then there is no searching over actions to be done
+        # The value is always computed from the perspective of the player who is to move next in the state,
+        # if the game has ended in a checkmate, then the last move from the opponent achieved it and the
+        # player to move next has lost, return a value of -1 and 9999 for best_action as a placeholder
+        value = -1 if env.board.is_checkmate() else 0
+        return 9999, value, np.zeros(0), (1, 0, 1)
 
-    # 39 is the largest net material difference we expect, but clip at [-1, +1] to avoid outliers
-    return np.clip(net_material / 39, -1, 1)
+    with torch.no_grad():  # Pass the state through the model to compute outputs
+        policy_logits, value_estimate = model([state, ])
+
+    # Determine the best action
+    board = chess.Board(state)
+
+    # Mask illegal moves
+    legal_indices = [MOVE_TO_IDX[m.uci()] for m in board.legal_moves if m.uci() in MOVE_TO_IDX]
+    mask = torch.zeros(len(MOVE_TO_IDX), dtype=torch.bool)
+    mask[legal_indices] = True
+    policy_logits[0, ~mask] = float('-inf')
+
+    # Pick the best move greedily
+    best_action = policy_logits[0].argmax().item()
+
+    return best_action, value_estimate.item(), np.zeros(0), (1, 0, 0)
 
 
 #########################
@@ -94,23 +142,25 @@ def material_heuristic(state: str) -> float:
 def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **kwargs
                  ) -> Tuple[int, float, np.ndarray, Tuple[int]]:
     """
-    Performs a naive search operation where the next action selected it the one which results in the highest
-    estimated next state value according to the model. This function performs a depth 1 forward search.
+    Performs a naive search operation where the next action selected is the one which results in the highest
+    estimated next state value according to the model. This function performs a depth 1 forward search, so
+    the policy_logits outputs of the model aren't really used i.e. all possible next actions are evaluated.
 
     :param state: A FEN string denoting the current game state.
-    :param model: A value function approximator that produces board value estimates from the perspective of
-        the players whose turn it is with model(state_batch) where state_batch is a list of FEN strings.
+    :param model: A model that produces a value estimate and policy logits for a given input state (i.e. FEN)
+        from the perspective of the player whose turn it is to go next.
     :param batch_size: The size of the state_batch (a list of strings) fed to model.
     :param gamma: The temporal discount factor to apply to distant rewards. For chess this is usually 1.0.
     :return:
-        - best_action (int): The best action found in the search process.
-        - state_value (float): The estimated value of the input starting state.
+        - best_action (int): The best action found in the search process i.e. an int [0, 1967].
+        - state_value (float): The estimated terminal rewards [-1, +1] for the current player.
         - action_values (np.ndarray): The estimated value of each possible next action.
         - info (Tuple[int]): The total number of nodes evaluated, the max depth of the search tree and how
             many terminal game state nodes were visited.
     """
+    initial_state = state # Keep a copy of the initial state for later
     env = ChessEnv(initial_state=state)  # Instantiate the current game state
-    if env.ep_ended:  # If the episode has already ended, then there is no searching over action to be done
+    if env.ep_ended:  # If the episode has already ended, then there is no searching over actions to be done
         # The value is always computed from the perspective of the player who is to move next in the state,
         # if the game has ended in a checkmate, then the last move from the opponent achieved it and the
         # player to move next has lost, return a value of -1 and 9999 for best_action as a placeholder
@@ -119,7 +169,7 @@ def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **
 
     # Else: Perform a search over possible next actions in the env from the current starting state
     action_values = []  # Record a value estimate for each possible next action from the starting state
-    state_batches = []  # Record the FEN string encodings of possible next states that we will feed through
+    state_batches = []  # Record the FEN string encodings of possible next states that will be feed through
     # the model in batches to get out value estimates for each
     state_batches_idx = []  # Record the indices of the actions each state in state_batches corresponds to,
     # we will only run states that are non-terminal through the model to minimize computations i.e. if the
@@ -145,8 +195,9 @@ def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **
     value_estimates = []
     for state_batch in state_batches:  # Compute the value estimates in batches to minimize runtime
         # Disable grad-tracking, not needed since no gradient step being taken, use bfloat16 dtypes
-        with torch.no_grad(), torch.autocast(device_type=model.device, dtype=torch.bfloat16):
-            v_est = model(state_batch).cpu().reshape(-1).tolist()
+        with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
+            policy_logits,  v_est = model(state_batch)
+            v_est = v_est.cpu().reshape(-1).tolist()
         value_estimates.extend(v_est)  # Aggregate the state value estimates into 1 linear list
 
     for idx, val in zip(state_batches_idx, value_estimates):  # Add the bootstrapped value estimates for s'
@@ -159,6 +210,8 @@ def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **
     action_values = np.array(action_values)
     state_value = action_values.max()  # Find the max value among the action values as the overall state value
     best_action = np.random.choice(np.where(action_values == state_value)[0])  # Randomly select from argmaxes
+    env = ChessEnv(initial_state=initial_state)  # Instantiate the initial game state
+    best_action = env.get_move_idx(best_action) # Convert to an int [0, 1967]
     return best_action, state_value, action_values, (1, len(action_values) + 1, terminal_nodes)
 
 
@@ -173,14 +226,16 @@ class Node_MMS:
     """
 
     def __init__(self, state: str, parent: Optional[Node_MMS] = None, gamma: float = 1.0,
-                 reward: float = 0.0):
+                 reward: float = 0.0, policy_logits: np.ndarray = None):
         """
-        Instantiates a MMS tree node.
+        Instantiates a Minimax Search (MMS) tree node.
 
         :param state: A FEN string denoting the current game state.
         :param parent: A pointer to this node's parent node in the search tree. Will be None for the root.
         :param gamma: The temporal discount factor to apply to distant rewards. For chess this is usually 1.0.
         :param reward: The reward obtained at the parent node for taking the action that results in this node.
+        :param policy_logits: A vector of policy_logits denoting the model's estimates of move value. This is
+            used to sort legal moves for expansion i.e. explore the ones estimated to be most promising first.
         """
         self.state = state  # Record the FEN state encoding of this game state
         self.state_ = " ".join(state.split()[:-1])  # Remove the total move counter from the FEN
@@ -197,7 +252,13 @@ class Node_MMS:
         self.maximize = self.root_turn == self.node_turn  # A bool if this node is a maximization node
         # Maintain a list of actions from this state that we have not yet created child nodes for, go in order
         # from smallest to largest when creating new actions i.e. start with action 0, 1, 2... etc.
+
+        # Create a list of unexplored actions to consider from this node i.e. start off with all legal actions
+        # in a list, we will pop from the end to get the next one, since this node has not yet been evaluated,
+        # we do not have any special ordering. This ordering can be updated later through the
+        # update_unexplored_actions method once the node is evaluated through the model
         self.unexplored_actions = list(range(board.legal_moves.count()))[::-1]
+
         self.children = []  # Maintain pointers to each child node
 
         if parent is not None:  # alpha and beta values are inherited from parent nodes, alpha and beta values
@@ -241,6 +302,27 @@ class Node_MMS:
             val = node.reward + node.gamma * node.value
             node = node.parent  # Update the node pointer for next iteration, move to the parent of this node
 
+    def update_unexplored_actions(self, policy_logits: np.ndarray) -> None:
+        """
+        This method updates the ordering of self.unexplored_actions based on a vector of input policy_logits
+        which is expected to be a 1d ndarray of length 1968. After a node passed through the model, we will
+        have a value estimate and set of policy logits for it. This method re-orders the unexplored_actions
+        list according to the policy logits provided so that further exploration of child nodes is prioritized
+        to begin with those which are estimated by the model to be most promising first.
+
+        :param policy_logits: A length 1968 np.array containing policy logit values for actions from this
+            node.
+        :returns: None, the internal self.unexplored_actions list is updated.
+        """
+        if len(self.unexplored_actions) == 0: # Skip if self.unexplored_actions is empty
+            return None
+        env = ChessEnv(initial_state=self.state)
+        move_vals = [policy_logits[env.get_move_idx(action_idx)] for action_idx in self.unexplored_actions]
+        actions = sorted([(val, idx) for val, idx in zip(move_vals, self.unexplored_actions)],
+                         key=lambda x: (x[0], x[1])) # Sort in ascending order by move value, exploration
+        # occurs by popping from the end, so put the highest value moves at the end
+        self.unexplored_actions = [x[1] for x in actions] # Retain only the action_idx for each
+
     def __str__(self) -> str:
         return self.state
 
@@ -279,12 +361,13 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
     :param hoirzon: The max depth of the search tree at which point the model is used to estimate values
         instead.
     :return:
-        - best_action (int): The best action found in the search process.
-        - state_value (float): The estimated value of the input starting state.
+        - best_action (int): The best action found in the search process i.e. an int [0, 1967].
+        - state_value (float): The estimated terminal rewards [-1, +1] for the current player.
         - action_values (np.ndarray): The estimated value of each possible next action.
         - info (Tuple[int]): The total number of nodes evaluated, the max depth of the search tree and how
             many terminal game state nodes were visited.
     """
+    initial_state = state # Keep a copy of the initial state for later
     board = chess.Board(state)  # Compute the reward that would have been generated on the move prior to
     # reaching the current game state i.e. +1 reward for the prior player if the board is now a checkmate
     # and 0 otherwise (i.e. for intermediate moves or any kind of draw condition)
@@ -294,9 +377,10 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
         # placeholder since an integer is expected to be returned
         return 9999, root.reward, np.zeros(0), (1, 0, 1)
     elif horizon == 0:  # If the horizon is zero, then use the model to evaluate and return that value
-        with torch.no_grad(), torch.autocast(device_type=model.device, dtype=torch.bfloat16):
-            vale_est = model([state]).cpu().reshape(-1).tolist()[0]
-        return 9999, vale_est, np.zeros(0), (1, 0, 0)
+        with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
+            policy_logits, val_est = model([state, ])
+            val_est = val_est.cpu().reshape(-1).tolist()[0]
+        return 9999, val_est, np.zeros(0), (1, 0, 0)
 
     # Run minimax search with alpha-beta pruning using DFS with batched leaf-evaluation
     cache = {}  # Cache model evaluations so that they don't need to be re-run
@@ -368,16 +452,19 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
             # If the eval_batch has reached batch_size or if the node_stack for further exploration is
             # depleted, then evaluate the nodes contained in eval_batch and update the tree accordingly
             state_batch = [node.state for node in eval_batch]  # Extract a list of FEN state encodings (str)
-            with torch.no_grad(), torch.autocast(device_type=model.device, dtype=torch.bfloat16):
-                value_batch = model(state_batch).cpu().reshape(-1).tolist()
+            with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
+                policy_logits, value_batch = model(state_batch) # Fwd pass through the model
+                policy_logits = policy_logits.cpu().numpy() # (batch_size, 1968)
+                value_batch = value_batch.cpu().reshape(-1).tolist() # (batch_size, )
 
-            for node, value in zip(eval_batch, value_batch):  # Update the tree with these value estimates
+            for node, p_logits, value in zip(eval_batch, policy_logits, value_batch):  # Update the tree
                 # Record the value approximation of this node and deal with sign flipping to make the value
                 # estimate from the perspective of the root node (a maximizer node)
-                value *= (1 if node.maximize else -1)  # Flip the sign if the opponent is to move next
+                value *= (1 if node.maximize else -1)  # Flip the sign if this node is a minimizer
                 cache[node.state_] = value  # Add this value to the cache once computed
                 node.value = value  # Set as the node's value once obtained
                 node.update_tree()  # Once populated, backup the update throughout the tree
+                node.update_unexplored_actions(p_logits)  # Re-order based on the policy logits
 
             eval_batch = []  # Once this batch is finished, clear out the buffer for the next batch of nodes
 
@@ -385,6 +472,8 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
     action_values = np.array([child.reward + child.value * gamma for child in root.children])
     state_value = action_values.max()  # Find the max value among the action values as the overall state value
     best_action = np.random.choice(np.where(action_values == state_value)[0])  # Randomly select from argmaxes
+    env = ChessEnv(initial_state=initial_state)  # Instantiate the initial game state
+    best_action = env.get_move_idx(best_action) # Convert to an int [0, 1967]
     return best_action, state_value, action_values, (count_total_nodes(root), max_depth(root), terminal_nodes)
 
 
@@ -465,7 +554,7 @@ class Node_MCTS:
             - N(parent) = How many times the parent node has been visited in total
         """
         if not self.children or self.unvisited_leaf_nodes == 0:  # Return None if there are no child nodes
-            return None  # yet unexplored down this route
+            return None  # not yet explored down this branch
 
         # Look for the max PUCT value among all child nodes with unvisited leaf nodes
         argmax_node, max_val = None, -float("inf")
@@ -489,17 +578,16 @@ class Node_MCTS:
 
         return argmax_node
 
-    def expand_legal_moves(self, prior_heuristic: Callable = None) -> None:
+    def expand_legal_moves(self, policy_logits: np.ndarray = None) -> None:
         """
         This method expands the current node i.e. adds unexplored child nodes to self.children if applicable
         (i.e. if this node is non-terminal) and sets self.is_expanded to True. The child nodes created have
-        their prior values set by softmax(prior_heuristic(child.state)) if provided, otherwise a uniform prior
-        of 1 / num_actions is used where num_actions == n_children. The prior values are configured to sum to
+        their prior values set by softmax(policy_logits) if provided, otherwise a uniform prior of
+        1 / num_actions is used where num_actions == n_children. The prior values are configured to sum to
         1 across all actions
 
-        :param prior_heuristic: A heuristic function for computing a prior value for each child node added.
-            Should be a function that takes the FEN state (str) as its first argument and returns the value
-            estimate for the player whose move is next.
+        :param policy_logits: A np.ndarray of length 1968 denoting the policy logits for this node's next
+            moves i.e. a vector denoting how attractive each possible move looks according to the model.
         :return: None, Node objects are added as children to the current node.
         """
         assert not self.is_expanded, "This node has already been expanded"
@@ -512,25 +600,24 @@ class Node_MCTS:
             for move in legal_moves:  # Add a child node for each legal move starting here
                 board.push(move)  # Make this move on the board to get the next resulting game state
                 child = Node_MCTS(state=board.fen(), parent=self)
-                if prior_heuristic is None:  # If no prior_heuristic provided, then set to the unif prior 1/n
+                if policy_logits is None:  # If no policy_logits provided, then set to the unif prior 1/n
                     child.prior = uniform_prior
-                else:  # If a prior_heuristic is given, then use it to generate a prior for each child node
-                    # The prior_heuristic will be evaluated from the perspective of the child i.e. the player
-                    # to go next in the child node state, flip the sign since it will only be accessed by
-                    # the parent node in making an expansion selection, will be passed through softmax
-                    child.prior = prior_heuristic(child.state) * (-1)
+                else:  # If a policy_logits is given, use this logit value instead as the prior
+                    child.prior = policy_logits[MOVE_TO_IDX[str(move)]]
                 self.children.append(child)
                 board.pop()  # Backtrack to visit the next legal move
                 unvisited_leaf_nodes_chg += 1  # Record another unexplored child node added
 
             # Once we've added all the prior values, normalize across them using softmax to ensure that they
             # are all positive and sum to 1 across all actions (children)
-            normed_priors = softmax([child.prior for child in self.children])
+            normed_priors = softmax([child.prior.astype(np.float64) for child in self.children])
+            prior_sum = normed_priors.sum()
             if self.parent is None:  # Add dirichlet noise at the parent node to the child prior values
-                rng = np.random.default_rng()
-                noise = rng.dirichlet([0.3 for i in range(len(self.children))], size=1).reshape(-1)
-                normed_priors = (1 - 0.25) * normed_priors + (0.25) * noise
-            assert np.abs(normed_priors.sum() - 1.0) < 1e-6, "normed_priors do not sum to 1.0"
+                alpha, eps = 0.3, 0.25
+                noise = RNG.dirichlet([alpha for i in range(len(self.children))], size=1).reshape(-1)
+                normed_priors = (1 - eps) * normed_priors + (eps) * noise
+            prior_sum = normed_priors.sum()
+            assert np.abs(prior_sum - 1.0) < 1e-6, f"normed_priors do not sum to 1.0, got {prior_sum}"
 
             for i, prior_val in enumerate(normed_priors):  # Update values after applying softmax collectively
                 self.children[i].prior = prior_val
@@ -577,9 +664,8 @@ class Node_MCTS:
             node = node.parent  # Move up to the next node along the path to the root
 
 
-def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: int = 200,
-                            prior_heuristic: Callable = relative_material_diff,
-                            **kwargs) -> Tuple[int, float, np.ndarray, Tuple[int]]:
+def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: int = 200, **kwargs
+                            ) -> Tuple[int, float, np.ndarray, Tuple[int]]:
     """
     Performs Monte Carlo Tree Search (MCTS) for n iterations where model is used as a state value approximator
     to perform bootstrapping.
@@ -588,24 +674,28 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
     :param model: A value function approximator that produces board value estimates from the perspective of
         the players whose turn it is with model(state_batch) where state_batch is a list of FEN strings.
     :param batch_size: The size of the state_batch (a list of strings) fed to model.
-    :param prior_heuristic: A function that takes in a FEN string state representation and outputs a value
-        estimate (should be very fast to compute) for the player whose turn it is next.
     :param n_iters: The number of iterations to run (i.e. nodes to expand) when running MCTS.
     :return:
-        - best_action (int): The best action found in the search process.
-        - state_value (float): The estimated value of the input starting state.
+        - best_action (int): The best action found in the search process i.e. an int [0, 1967].
+        - state_value (float): The estimated terminal rewards [-1, +1] for the current player.
         - action_values (np.ndarray): The estimated value of each possible next action.
         - info (Tuple[int]): The total number of nodes evaluated, the max depth of the search tree and how
             many terminal game state nodes were visited.
     """
-    cache = {}  # Cache the values output from the model, if we send it the same state 2x re-use prior values
+    initial_state = state # Keep a copy of the initial state for later
+    cache = {}  # Cache the outputs from the model, if we send it the same state 2x re-use prior values
     terminal_nodes = 0  # Count how many of the nodes reached were terminal
     nodes_expanded = 0  # Count how many total nodes are expanded during MCTS
     root = Node_MCTS(state=state, parent=None)  # Create a search tree root node
     if root.is_terminal:  # If the input state is a terminal state, no searching required, board value known
         return 9999, root.terminal_reward, np.zeros(0), (1, 0, 1)
     else:  # Expand the root node to get first generation child nodes
-        root.expand_legal_moves(prior_heuristic)
+        with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
+            policy_logits, value_batch = model([state])
+            p_logits = policy_logits.cpu().numpy().reshape(-1) # (1968, )
+            val_est = value_batch.cpu().reshape(-1).tolist()  # (batch_size, )
+        root.backup(val_est[0])
+        root.expand_legal_moves(p_logits)
 
     for i in range(n_iters // batch_size + 1):  # Run a batched MC process for batched model forward passes
         leaf_nodes = []  # Record leaf nodes to be passed to the model for batched evaluation
@@ -645,70 +735,36 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
                 cache[leaf_node.state_] = None  # Add a placeholder in the cache, this will prevent us from
                 # running duplicative states through the model for leaf nodes within the current leaf batch
 
-        with torch.no_grad(), torch.autocast(device_type=model.device, dtype=torch.bfloat16):
-            value_batch = model(state_batch).cpu().reshape(-1).tolist()  # Run in parallel on the GPU
-        for idx, val_est in zip(leaf_node_idx, value_batch):  # Update the cache with the new model outputs
-            cache[leaf_nodes[idx].state_] = val_est
+        with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
+            policy_logits, value_batch = model(state_batch)
+            policy_logits = policy_logits.cpu().numpy() # (batch_size, 1968)
+            value_batch = value_batch.cpu().reshape(-1).tolist()  # (batch_size, )
 
-        # 3). Perform backup operations to propagate the new value estimates upwards in the tree
+        # Update the cache with the new model outputs
+        for idx, p_logits, val_est in zip(leaf_node_idx, policy_logits, value_batch):
+            cache[leaf_nodes[idx].state_] = (p_logits, val_est)
+
+        # 3). Perform backup operations to propagate the new value estimates upwards in the tree and update
+        # the prior value estimates from using the heuristic priors to using the policy_logit values instead
         for i, leaf_node in enumerate(leaf_nodes):
             # We only ever select and expand a leaf node 1x, assert that this is leaf hasn't already been
             # reached and expanded before, if so then raise an assertion error
             assert not leaf_node.is_expanded, "leaf node already expanded"
 
             if leaf_node.is_terminal:  # Then the value of the game state is know for certain, no est needed
-                val_est = leaf_node.terminal_reward
+                p_logits, val_est = None, leaf_node.terminal_reward
             else:  # Otherwise we will rely on the model to approximate the value of the state
                 # Flip sign if evaluated from opposing side, all rewards should be from the side of root
-                val_est = cache[leaf_node.state_] * (1 if leaf_node.node_turn == leaf_node.root_turn else -1)
+                p_logits, val_est = cache[leaf_node.state_]
+                val_est *= (1 if leaf_node.node_turn == leaf_node.root_turn else -1)
 
             # Add the estimated value to all nodes along the path from leaf to root and decrement virtual loss
             leaf_node.backup(val_est)
-            leaf_node.expand_legal_moves(prior_heuristic)  # Create child nodes (if non-terminal)
+            leaf_node.expand_legal_moves(p_logits)  # Create child nodes (if non-terminal)
 
     # Now that we have populated the MC tree, identify the best action and the estimated state value
     action_values = np.array([node.Q() for node in root.children])
-    state_value = action_values.max()  # Find the max value among the action values as the overall state value
-    best_action = np.random.choice(np.where(action_values == state_value)[0])  # Randomly select from argmaxes
+    state_value, best_action = action_values.max(), np.argmax(action_values)
+    env = ChessEnv(initial_state=initial_state)  # Instantiate the initial game state
+    best_action = env.get_move_idx(best_action) # Convert to an int [0, 1967]
     return best_action, state_value, action_values, (nodes_expanded, max_depth(root), terminal_nodes)
-
-
-#### TODO: DEBUG TESTING ####
-if __name__ == "__main__":
-    import time
-
-    state = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'  # Default starting state
-    state = 'r1bqkb1r/pppp1ppp/5n2/4n3/P1B1P3/8/1PPP1PPP/RNB1K1NR b KQkq - 0 5'  # Regular board
-    state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/7q/5N1P/2PPPPP1/RNBQKB1R b KQkq - 2 5'  # 1 move away from checkmate
-    state = 'rnb1k1r1/pPppnppp/4p3/2b5/7q/5N1P/2PPPPP1/RNBQKB1R w KQq - 1 8'  # Pawn promotion
-    state = 'rnb1k1nr/pppp1ppp/4p3/P1b5/8/5N1P/2PPPqP1/RNBQKB1R w KQkq - 0 6'  # Checkmate
-    board = chess.Board(state)
-    dummy_model = lambda x: torch.rand(len(x)) * 2 - 1  # TEMP sample model, fill in for a value approximator
-
-    ## Test the Naive Search algo
-    # best_action, state_value, action_values = naive_search(state, dummy_model)
-    # print("best_action", best_action)
-    # print("state_value", state_value)
-    # print("action_values", action_values)
-
-    ## Test the Minimax Search Algo
-    # best_action, state_value, action_values = minimax_search(state, dummy_model, gamma=1, horizon=4)
-    # print("best_action", best_action) # Should pick 13
-    # print("state_value", state_value)
-    # print("action_values", action_values) # Should be 46 actions from the initial board state
-    # print(list(board.legal_moves)[best_action])
-
-    # Test Monte Carlo Tree Search
-    # start_time = time.time()
-    # best_action, state_value, action_values = monte_carlo_tree_search(state, dummy_model, 32, 500,
-    #                                                                   material_heuristic)
-    # print(f"Runtime: {time.time() - start_time:.2f}s")
-    # print("best_action", best_action)
-    # print("state_value", state_value)
-    # print("action_values", action_values)
-
-    # board = chess.Board(state)
-    # legal_moves = list(board.legal_moves)
-    # for i, x in enumerate(action_values):
-    #     if x == 1:
-    #         print(legal_moves[i])

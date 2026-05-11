@@ -271,6 +271,12 @@ class CNN(nn.Module):
             nn.Tanh()
         )  # Output: (batch_size, 1)
 
+    def get_device(self) -> str:
+        """
+        Returns the device the model is currently on by returning the device of the parameters.
+        """
+        return next(self.backbone.parameters()).device.type
+
     @staticmethod
     def state_to_model_input(state_batch: List[str]) -> torch.Tensor:
         """
