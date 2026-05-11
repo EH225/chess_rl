@@ -116,7 +116,7 @@ def null_search(state: str, model, **kwargs) -> Tuple[int, float, np.ndarray, Tu
         value = -1 if env.board.is_checkmate() else 0
         return 9999, value, np.zeros(0), (1, 0, 1)
 
-    with torch.no_grad():  # Pass the state through the model to compute outputs
+    with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
         policy_logits, value_estimate = model([state, ])
 
     # Determine the best action
@@ -197,7 +197,7 @@ def naive_search(state: str, model, batch_size: int = 64, gamma: float = 1.0, **
         # Disable grad-tracking, not needed since no gradient step being taken, use bfloat16 dtypes
         with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
             policy_logits,  v_est = model(state_batch)
-            v_est = v_est.cpu().reshape(-1).tolist()
+            v_est = v_est.cpu().float().reshape(-1).tolist()
         value_estimates.extend(v_est)  # Aggregate the state value estimates into 1 linear list
 
     for idx, val in zip(state_batches_idx, value_estimates):  # Add the bootstrapped value estimates for s'
@@ -379,7 +379,7 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
     elif horizon == 0:  # If the horizon is zero, then use the model to evaluate and return that value
         with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
             policy_logits, val_est = model([state, ])
-            val_est = val_est.cpu().reshape(-1).tolist()[0]
+            val_est = val_est.cpu().float().reshape(-1).tolist()[0]
         return 9999, val_est, np.zeros(0), (1, 0, 0)
 
     # Run minimax search with alpha-beta pruning using DFS with batched leaf-evaluation
@@ -454,8 +454,8 @@ def minimax_search(state: str, model, gamma: float = 1.0, batch_size: int = 64, 
             state_batch = [node.state for node in eval_batch]  # Extract a list of FEN state encodings (str)
             with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
                 policy_logits, value_batch = model(state_batch) # Fwd pass through the model
-                policy_logits = policy_logits.cpu().numpy() # (batch_size, 1968)
-                value_batch = value_batch.cpu().reshape(-1).tolist() # (batch_size, )
+                policy_logits = policy_logits.cpu().float().numpy() # (batch_size, 1968)
+                value_batch = value_batch.cpu().float().reshape(-1).tolist() # (batch_size, )
 
             for node, p_logits, value in zip(eval_batch, policy_logits, value_batch):  # Update the tree
                 # Record the value approximation of this node and deal with sign flipping to make the value
@@ -692,8 +692,8 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
     else:  # Expand the root node to get first generation child nodes
         with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
             policy_logits, value_batch = model([state])
-            p_logits = policy_logits.cpu().numpy().reshape(-1) # (1968, )
-            val_est = value_batch.cpu().reshape(-1).tolist()  # (batch_size, )
+            p_logits = policy_logits.cpu().float().numpy().reshape(-1) # (1968, )
+            val_est = value_batch.cpu().float().reshape(-1).tolist()  # (batch_size, )
         root.backup(val_est[0])
         root.expand_legal_moves(p_logits)
 
@@ -737,8 +737,8 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
 
         with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
             policy_logits, value_batch = model(state_batch)
-            policy_logits = policy_logits.cpu().numpy() # (batch_size, 1968)
-            value_batch = value_batch.cpu().reshape(-1).tolist()  # (batch_size, )
+        policy_logits = policy_logits.cpu().float().numpy() # (batch_size, 1968)
+        value_batch = value_batch.cpu().float().reshape(-1).tolist()  # (batch_size, )
 
         # Update the cache with the new model outputs
         for idx, p_logits, val_est in zip(leaf_node_idx, policy_logits, value_batch):
