@@ -500,10 +500,10 @@ class Node_MCTS:
         self.parent = parent  # Record a pointer to this node's parent node, will be None if this is the root
         # Make note of whose turn it is (white or black) at the root node. If parent is None, then this is a
         # root node, record from the current game state, otherwise inherit from this from the parent node
-        self.root_turn = board.turn if parent is None else parent.root_turn
+        self.root_turn = parent.root_turn if parent is not None else board.turn
         self.node_turn = board.turn  # Record the turn value for this game state's next-to-move
         self.value_sum = 0  # Record the sum of all value updates to this node, starts at 0
-        self.n_visits = 1 if parent is None else 0  # Record the total node visits, root begins with 1
+        self.n_visits = 0  # Record the total node visits
         self.is_expanded = False  # Bool flag for if this node has been expanded yet, beings at False
 
         # Bool flag indicating whether this is a terminal game state node
@@ -517,8 +517,9 @@ class Node_MCTS:
         else:
             self.terminal_reward = None
 
-        self.virtual_loss = 0  # Used to discourage the same node being selected many time during batched
-        # leaf node selection, beings at 0, ticks up as more nodes in the batch select it
+        # Used to discourage the same node being selected many time during batched leaf node selection,
+        # beings at 0, ticks up as more nodes in the batch select it
+        self.virtual_loss = 0
         self.children = []  # A collection of pointers to other child nodes, doesn't get populated until
         # this node is expanded i.e. visited for the first time by the selection step
         self.unvisited_leaf_nodes = 1  # Track how many unvisited leaf nodes including this node itself
@@ -531,7 +532,7 @@ class Node_MCTS:
         node has never been visited before, then the returned value is 0 (a neutral value between -1 and +1,
         the two max values we could have).
         """
-        return self.value_sum / self.n_visits if self.n_visits > 0 else 0
+        return (self.value_sum / self.n_visits) if (self.n_visits > 0) else 0
 
     def argmax_PUCT_child(self) -> Optional[Node_MCTS]:
         """
@@ -554,7 +555,7 @@ class Node_MCTS:
             - N(parent) = How many times the parent node has been visited in total
         """
         if not self.children or self.unvisited_leaf_nodes == 0:  # Return None if there are no child nodes
-            return None  # not yet explored down this branch
+            return None  # or if there are no unvisited leaf node descendents of the child nodes
 
         # Look for the max PUCT value among all child nodes with unvisited leaf nodes
         argmax_node, max_val = None, -float("inf")
@@ -563,14 +564,18 @@ class Node_MCTS:
                 continue
             else:
                 n_eff = child.n_visits + child.virtual_loss  # virtual_loss discourages repeat selections
-                val = child.value_sum / n_eff if n_eff > 0 else 0  # Avoid division by 0 issues
+                # print("n_eff", n_eff)
+                #   print("child.value_sum", child.value_sum)
+                val = (child.value_sum / n_eff) if n_eff > 0 else 0  # Avoid division by 0 issues
                 # At this node, we will select the the child whose value is most appealing to this node's
                 # perspective, all value_sums are from the root's perspective so flip the signs if this node
                 # is played by the opponent who would want to minimize the return of the root node
+                # print("val pre-flip", val, "self.node_turn", self.node_turn, "self.root_turn", self.root_turn)
                 val *= (1 if self.node_turn == self.root_turn else -1)
+                # print("val post-flip", val)
                 c_puct = self.c_init + np.log(n_eff + self.c_base + 1) - np.log(self.c_base)
                 # child.prior is recorded from the perspective of the this node, the parent node so no sign
-                # flip is needed, they're also normalized using softmax so it's non-trivial to flip
+                # flip is needed, they're also normalized using softmax so it's non-trivial to flip them
                 val += c_puct * child.prior * np.sqrt(self.n_visits) / (1 + n_eff)
                 if val > max_val:  # Update the argmax node seen so far, select the highest value node among
                     # all child nodes from this node's turn perspective
@@ -611,7 +616,6 @@ class Node_MCTS:
             # Once we've added all the prior values, normalize across them using softmax to ensure that they
             # are all positive and sum to 1 across all actions (children)
             normed_priors = softmax([child.prior.astype(np.float64) for child in self.children])
-            prior_sum = normed_priors.sum()
             if self.parent is None:  # Add dirichlet noise at the parent node to the child prior values
                 alpha, eps = 0.3, 0.25
                 noise = RNG.dirichlet([alpha for i in range(len(self.children))], size=1).reshape(-1)
@@ -629,7 +633,7 @@ class Node_MCTS:
 
         self.is_expanded = True  # Set this flag to true now that this node has been expanded with children
 
-    def incriment_virtual_loss(self) -> None:
+    def increment_virtual_loss(self) -> None:
         """
         Starting at this node, this method increments the virtual_loss counters for all nodes along the path
         from this node to the root node and also decrements the unvisited_leaf_nodes counters to prevent
@@ -668,7 +672,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
                             ) -> Tuple[int, float, np.ndarray, Tuple[int]]:
     """
     Performs Monte Carlo Tree Search (MCTS) for n iterations where model is used as a state value approximator
-    to perform bootstrapping.
+    to perform bootstrapping and policy logits guide exploration towards more attractive pathways.
 
     :param state: A FEN string denoting the current game state.
     :param model: A value function approximator that produces board value estimates from the perspective of
@@ -690,14 +694,17 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
     if root.is_terminal:  # If the input state is a terminal state, no searching required, board value known
         return 9999, root.terminal_reward, np.zeros(0), (1, 0, 1)
     else:  # Expand the root node to get first generation child nodes
+        root.increment_virtual_loss() # Select the root node as the first to be expanded
+
         with torch.no_grad(), torch.autocast(device_type=model.get_device(), dtype=get_amp_dtype()):
             policy_logits, value_batch = model([state])
             p_logits = policy_logits.cpu().float().numpy().reshape(-1) # (1968, )
             val_est = value_batch.cpu().float().reshape(-1).tolist()  # (batch_size, )
+
         root.backup(val_est[0])
         root.expand_legal_moves(p_logits)
 
-    for i in range(n_iters // batch_size + 1):  # Run a batched MC process for batched model forward passes
+    while nodes_expanded < n_iters:  # Run a batched MC process for batched model forward passes
         leaf_nodes = []  # Record leaf nodes to be passed to the model for batched evaluation
 
         if root.unvisited_leaf_nodes == 0:  # If all nodes have been explored, stop iterating, there are
@@ -719,7 +726,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
             leaf_node = node  # Change alias now that we've reached the end of the node path
             # Use virtual loss to discourage other iters from selecting a similar path and decriment the
             # unvisited_leaf_nodes counters along this path to prevent duplicate selections
-            node.incriment_virtual_loss()
+            node.increment_virtual_loss()
             leaf_nodes.append(leaf_node)  # Add this leaf node to our selection of leaf_nodes
             if leaf_node.is_terminal:
                 terminal_nodes += 1  # Count how many nodes visited are terminal overall
@@ -756,7 +763,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
             else:  # Otherwise we will rely on the model to approximate the value of the state
                 # Flip sign if evaluated from opposing side, all rewards should be from the side of root
                 p_logits, val_est = cache[leaf_node.state_]
-                val_est *= (1 if leaf_node.node_turn == leaf_node.root_turn else -1)
+                val_est = val_est * (1 if leaf_node.node_turn == leaf_node.root_turn else -1)
 
             # Add the estimated value to all nodes along the path from leaf to root and decrement virtual loss
             leaf_node.backup(val_est)
