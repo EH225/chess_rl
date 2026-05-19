@@ -215,7 +215,7 @@ class CNN(nn.Module):
     Implementation of a convolutional neural network (CNN) model chess board value and policy estimation.
     """
 
-    def __init__(self, num_res_blocks: int = 10, channels: int = 128, *args, **kwargs):
+    def __init__(self, num_res_blocks: int = 12, channels: int = 128, *args, **kwargs):
         """
         Initializes the required value and policy network model as a convolutional neural network (CNN). This
         network architecture follows a blend of various other resnet-based CNNs including the one from
@@ -233,7 +233,7 @@ class CNN(nn.Module):
         # 1). Begin with a shared backbone for both the policy and valid heads
         self.input_conv  = nn.Sequential(
             # Conv2d Block 1
-            nn.Conv2d(in_channels=18, out_channels=channels, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels=17, out_channels=channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(channels),
             nn.LeakyReLU(),  # (batch_size, channels, 8, 8)
             )
@@ -278,8 +278,8 @@ class CNN(nn.Module):
         Converts an input batch of board states (encoded using FEN as a string) into the expected state
         representations for this model (torch.Tensor) and moves the data to the same device as this model.
 
-        This CNN model operates on board representations that are [(12 + 4 + 1 + 1 + 1), 8, 8]
-        or [18, 8, 8] in total. The meaning of each plate (channel) input is as follows:
+        This CNN model operates on board representations that are [(12 + 4 + 1), 8, 8]
+        or [17, 8, 8] in total. The meaning of each plate (channel) input is as follows:
             1. Location of friendly pawns encoded with 1s
             2. Location of friendly knights encoded with 1s
             3. Location of friendly bishops encoded with 1s
@@ -300,7 +300,7 @@ class CNN(nn.Module):
         :return: A torch.Tensor of size (batch_size, 17, 8, 8)
         """
         sym_to_int = {s: i for i, s in enumerate("pnbrqk")}  # Mapping from symbol e.g. "b" to index e.g. 2
-        output = torch.zeros((len(state_batch), 18, 8, 8))  # 18 channels, 8 rows, 8 cols
+        output = torch.zeros((len(state_batch), 17, 8, 8))  # 17 channels, 8 rows, 8 cols
 
         for i, state in enumerate(state_batch):  # Add each state in the batch to the output torch.Tensor
             board = chess.Board(state)  # Use the FEN string encoding to create the board
@@ -338,7 +338,7 @@ class CNN(nn.Module):
             output[i, 14, :, :] = 1 if board.has_kingside_castling_rights(foe_color) else 0
             output[i, 15, :, :] = 1 if board.has_queenside_castling_rights(foe_color) else 0
 
-            # B). Add en passant rights as well as an 18th plane if there are any
+            # B). Add en passant rights as well as an 17th plane if there are any
             if board.ep_square:  # Will be None if no en passant is possible, there is at most 1 en passant
                 # on the board at any given time, it must immediately follow a pawn 2-cell jump
                 ep_r, ep_c = divmod(board.ep_square, 8)

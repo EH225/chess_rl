@@ -40,7 +40,7 @@ class SupervisedPretrainingDataset(Dataset):
         :param state_to_model_input: A callable function that converts a batch of FEN board state encodings
             into a torch.Tensor that can be passed into v_network.
         """
-        self.dataset = pd.read_parquet(dataset_path)  # Read in the data as a pd.DataFrame, 1.3 GB
+        self.dataset = pd.read_parquet(dataset_path)  # Read in the data as a pd.DataFrame, 2.6 GB
         self.state_to_model_input = state_to_model_input  # Function for converting a FEN into a tensor
 
     def __len__(self):
