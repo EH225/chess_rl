@@ -441,12 +441,12 @@ def run_pretraining(config_name: str) -> None:
     model = model_class(config)  # Init the model using the config file
 
     # 3). Define other inputs required for training
-    train_dataset_path = os.path.join(CURRENT_DIR, "pretrain_dset_train.parquet")
+    train_dataset_path = os.path.join(CURRENT_DIR, "lichess_train.parquet")
     train_dataloader = get_dataloader(batch_size=config['pretrain']['batch_size'],
                                       dataset_path=train_dataset_path,
                                       state_to_model_input=model.state_to_model_input)
 
-    val_dataset_path = os.path.join(CURRENT_DIR, "pretrain_dset_val.parquet")
+    val_dataset_path = os.path.join(CURRENT_DIR, "lichess_val.parquet")
     val_dataloader = get_dataloader(batch_size=config['pretrain']['batch_size'],
                                     dataset_path=val_dataset_path,
                                     state_to_model_input=model.state_to_model_input)
