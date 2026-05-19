@@ -215,7 +215,7 @@ class CNN(nn.Module):
     Implementation of a convolutional neural network (CNN) model chess board value and policy estimation.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, num_res_blocks: int = 10, channels: int = 128, *args, **kwargs):
         """
         Initializes the required value and policy network model as a convolutional neural network (CNN). This
         network architecture follows a blend of various other resnet-based CNNs including the one from
@@ -227,46 +227,41 @@ class CNN(nn.Module):
             B). A (batch_size, 1968) policy vector of logits over all possible UCI moves
         """
         super().__init__()
+        self.num_res_blocks = num_res_blocks
+        self.channels = channels
 
         # 1). Begin with a shared backbone for both the policy and valid heads
-        self.backbone = nn.Sequential(
+        self.input_conv  = nn.Sequential(
             # Conv2d Block 1
-            nn.Conv2d(in_channels=18, out_channels=64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(),  # (batch_size, 64, 8, 8)
-            ResBlockCNN(64),  # (batch_size, 64, 8, 8)
+            nn.Conv2d(in_channels=18, out_channels=channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(channels),
+            nn.LeakyReLU(),  # (batch_size, channels, 8, 8)
+            )
 
-            # Conv2d Block 2
-            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(),  # (batch_size, 128, 8, 8)
-            ResBlockCNN(128),  # (batch_size, 128, 8, 8)
-
-            # Conv2d Block 3
-            nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(),  # (batch_size, 256, 8, 8)
-            ResBlockCNN(256),  # (batch_size, 256, 8, 8)
-        )  # Output: (batch_size, 256, 8, 8)
+        # Uniform-width residual tower — depth is where the learning happens
+        self.res_tower = nn.Sequential(
+            *[ResBlockCNN(channels) for _ in range(num_res_blocks)]
+            ) # (batch_size, channels, 8, 8)
 
         # 2). Add a policy head sub-component that will operate off the input features from self.backbone
         self.policy_head = nn.Sequential(
-            nn.Conv2d(in_channels=256, out_channels=2, kernel_size=1),  # 1x1 conv to compress channels
+            nn.Conv2d(in_channels=channels, out_channels=2, kernel_size=1),  # 1x1 conv to compress channels
             nn.BatchNorm2d(2),
             nn.LeakyReLU(),
-            nn.Flatten(),  # (batch_size, 2*8*8) = (batch_size, 128)
-            nn.Linear(128, 1968)  # 1968 possible UCI moves
+            nn.Flatten(),  # (batch_size, 2 * 8 * 8) = (batch_size, 128)
+            nn.Linear(2 * 8 * 8, 1968)  # 1968 possible UCI moves
         )  # Output: (batch_size, 1968) - returns raw logits, no softmax applied here
 
         # 3). Add a value head sub-component that will operate off the input features from self.backbone
         self.value_head = nn.Sequential(
-            # Dense fully-connected Block 4
-            nn.Flatten(),  # (batch_size, 256, 8, 8) -> (batch_size, 16384)
-            nn.Linear(256 * 8 * 8, 256),  # (batch_size, 16384) -> (batch_size, 256)
+            nn.Conv2d(channels, 1, kernel_size=1),  # Compress to (batch_size, 1, 8, 8)
+            nn.BatchNorm2d(1),
             nn.LeakyReLU(),
-            nn.Linear(256, 128),  # (batch_size, 128) -> (batch_size, 64)
+            nn.Flatten(),  # (batch_size, 1, 8, 8) -> (batch_size, 64)
+            nn.Linear(8 * 8, 256),  # (batch_size, 64) -> (batch_size, 256)
             nn.LeakyReLU(),
-            nn.Linear(128, 1),  # (batch_size, 128) -> (batch_size, 1)
+            nn.Dropout(p=0.2), # Dropout regularization to reduce potential overfitting
+            nn.Linear(256, 1),  # (batch_size, 256) -> (batch_size, 1)
             # Use a final Tanh activation function at the end to produce value estimates [-1, +1]
             nn.Tanh()
         )  # Output: (batch_size, 1)
@@ -275,7 +270,7 @@ class CNN(nn.Module):
         """
         Returns the device the model is currently on by returning the device of the parameters.
         """
-        return next(self.backbone.parameters()).device.type
+        return next(self.parameters()).device.type
 
     @staticmethod
     def state_to_model_input(state_batch: List[str]) -> torch.Tensor:
@@ -296,7 +291,6 @@ class CNN(nn.Module):
             14. If player's side can queen-side castle (all 1s if yes, otherwise 0s)
             15. & 16. Same for opponent's king-side and queen-side castling rights
             17. En-Passant square - Encodes a 1 in a cell where an en passant capture move can be made if any
-            18. Fifty-move rule counter - Encodes the number of half-moves since last capture or pawn move
 
         Locationally, the friendly pieces are always shown at the bottom of the board and foe pieces always
         are shown at the top of the board. Therefore, there is some board flipping depending on the color of
@@ -357,7 +351,7 @@ class CNN(nn.Module):
 
             # C). 50 move rule counter - Encodes the number of half-moves since last capture or pawn move
             # when this counter reaches 100, then 50 whole moves have been made and the game ends in a draw
-            output[i, 17, :, :] = min(board.halfmove_clock, 100) / 100.0  # Scale to be [0, 1]
+            # output[i, 17, :, :] = min(board.halfmove_clock, 100) / 100.0  # Scale to be [0, 1]
 
         return output
 
@@ -382,7 +376,9 @@ class CNN(nn.Module):
                 x = self.state_to_model_input(state_batch).to(device)
             elif isinstance(state_batch, torch.Tensor): # Skip the conversion if already done
                 x = state_batch.to(device)
-            features = self.backbone(x)  # Get the shared deep latent features (batch_size, 256, 8, 8)
+
+            # Get the shared deep latent features (batch_size, channels, 8, 8)
+            features = self.res_tower(self.input_conv(x))
             # Pass these shared features to the policy and value sub-components to compute outputs
             policy_logits = self.policy_head(features)  # (batch_size, 1968)
             value_estimates = self.value_head(features).squeeze(1)  # (batch_size, )
