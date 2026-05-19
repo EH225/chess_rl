@@ -215,7 +215,7 @@ class CNN(nn.Module):
     Implementation of a convolutional neural network (CNN) model chess board value and policy estimation.
     """
 
-    def __init__(self, num_res_blocks: int = 12, channels: int = 128, *args, **kwargs):
+    def __init__(self, config, *args, **kwargs):
         """
         Initializes the required value and policy network model as a convolutional neural network (CNN). This
         network architecture follows a blend of various other resnet-based CNNs including the one from
@@ -227,25 +227,25 @@ class CNN(nn.Module):
             B). A (batch_size, 1968) policy vector of logits over all possible UCI moves
         """
         super().__init__()
-        self.num_res_blocks = num_res_blocks
-        self.channels = channels
+        self.num_res_blocks = config["model"].get("num_res_blocks", 12)
+        self.channels = config["model"].get("channels", 128)
 
         # 1). Begin with a shared backbone for both the policy and valid heads
         self.input_conv  = nn.Sequential(
             # Conv2d Block 1
-            nn.Conv2d(in_channels=17, out_channels=channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(channels),
+            nn.Conv2d(in_channels=17, out_channels=self.channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.channels),
             nn.LeakyReLU(),  # (batch_size, channels, 8, 8)
             )
 
         # Uniform-width residual tower — depth is where the learning happens
         self.res_tower = nn.Sequential(
-            *[ResBlockCNN(channels) for _ in range(num_res_blocks)]
+            *[ResBlockCNN(self.channels) for _ in range(self.num_res_blocks)]
             ) # (batch_size, channels, 8, 8)
 
         # 2). Add a policy head sub-component that will operate off the input features from self.backbone
         self.policy_head = nn.Sequential(
-            nn.Conv2d(in_channels=channels, out_channels=2, kernel_size=1),  # 1x1 conv to compress channels
+            nn.Conv2d(in_channels=self.channels, out_channels=2, kernel_size=1),  # 1x1 conv compress channels
             nn.BatchNorm2d(2),
             nn.LeakyReLU(),
             nn.Flatten(),  # (batch_size, 2 * 8 * 8) = (batch_size, 128)
@@ -254,7 +254,7 @@ class CNN(nn.Module):
 
         # 3). Add a value head sub-component that will operate off the input features from self.backbone
         self.value_head = nn.Sequential(
-            nn.Conv2d(channels, 1, kernel_size=1),  # Compress to (batch_size, 1, 8, 8)
+            nn.Conv2d(self.channels, 1, kernel_size=1),  # Compress to (batch_size, 1, 8, 8)
             nn.BatchNorm2d(1),
             nn.LeakyReLU(),
             nn.Flatten(),  # (batch_size, 1, 8, 8) -> (batch_size, 64)
