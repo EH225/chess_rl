@@ -173,24 +173,24 @@ class Trainer:
         self.val_dataloader = val_dataloader
 
         # Configure the optimizer for training, exclude bias and BatchNorm weights from weight decay
-        # decay_params = [p for n, p in model.named_parameters()
-        #                 if p.requires_grad and not any(nd in n for nd in ['bias', 'bn'])]
-        # no_decay_params = [p for n, p in model.named_parameters()
-        #                    if p.requires_grad and any(nd in n for nd in ['bias', 'bn'])]
-        decay_params, no_decay_params= [], []
+        decay_params = [p for n, p in model.named_parameters()
+                        if p.requires_grad and not any(nd in n for nd in ['bias', 'bn'])]
+        no_decay_params = [p for n, p in model.named_parameters()
+                            if p.requires_grad and any(nd in n for nd in ['bias', 'bn'])]
+        # decay_params, no_decay_params= [], []
 
-        for module in model.modules():
-            for name, param in module.named_parameters(recurse=False):
-                if not param.requires_grad: # Skip over if no gradient tracking
-                    continue
+        # for module in model.modules():
+        #     for name, param in module.named_parameters(recurse=False):
+        #         if not param.requires_grad: # Skip over if no gradient tracking
+        #             continue
 
-                if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
-                    # Exclude any kind of batch norm from weight decay
-                    no_decay_params.append(param)
-                elif name == "bias": # Also exclude any bias terms from weight decay as well
-                    no_decay_params.append(param)
-                else: # All others will have weight decay applied to them
-                    decay_params.append(param)
+        #         if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+        #             # Exclude any kind of batch norm from weight decay
+        #             no_decay_params.append(param)
+        #         elif name == "bias": # Also exclude any bias terms from weight decay as well
+        #             no_decay_params.append(param)
+        #         else: # All others will have weight decay applied to them
+        #             decay_params.append(param)
 
         # Check that all parameters are fully partitioned across decay_params and no_decay_params, check that
         # there is no overlap and also that the total number across both subsets sums to the expected total
