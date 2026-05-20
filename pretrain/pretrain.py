@@ -74,7 +74,7 @@ def get_dataloader(batch_size: int, dataset_path: str, state_to_model_input: Cal
     device = get_device()  # Auto-detect the available hardware
     dataset = SupervisedPretrainingDataset(dataset_path, state_to_model_input)
     if device == "cuda":
-        num_workers, pin_memory, persistent_workers = os.cpu_count(), True, True
+        num_workers, pin_memory, persistent_workers = max(1, min(os.cpu_count() - 2, 4)), True, False
     else:
         num_workers, pin_memory, persistent_workers = 0, False, False
     return DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
@@ -442,7 +442,7 @@ class Trainer:
                     torch.cuda.empty_cache()
 
                 del policy_logits, value_est, policy_loss, value_loss, total_loss
-                del state_tensors, value_tgt, policy_tgt
+                del state_tensors, value_tgt, policy_tgt, batch
                 pbar.update(1)
 
 
