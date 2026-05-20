@@ -285,18 +285,16 @@ class Trainer:
                     state[k] = v.to(self.device)
 
 
-    def _get_legal_move_mask(self, state_batch: List[str], move_uci_to_idx: Dict, device: str
-                             ) -> torch.Tensor:
+    def _get_legal_move_mask(self, state_batch: List[str], move_uci_to_idx: Dict) -> torch.Tensor:
         """
         Returns a boolean mask of shape (num_batch, 1968) where True = legal move.
 
         :param state_batch: A list of fen board states.
         :param move_uci_to_idx: A dictionary mapping UCI moves e.g. "a1a2" to integers e.g. 5.
-        :param device: The device to create the legal move mask on e.g. "cuda" or "cpu".
         :returns: A (batch_size, 1968) mask matching the shape of a policy_logits output denoting which moves
             are legal.
         """
-        mask = torch.zeros(len(state_batch), 1968, dtype=torch.bool, device=device)
+        mask = torch.zeros(len(state_batch), 1968, dtype=torch.bool)
         for i, state in enumerate(state_batch):
             board = chess.Board(state)
             for move in board.legal_moves:
@@ -350,8 +348,8 @@ class Trainer:
                         policy_logits, value_est = self.model(state_tensors)
                         if mask_illegal_moves:  # If True, mask out illegal moves from the policy logits with
                             # -np.inf so that the model does not get penalized for giving them prob mass
-                            mask = self._get_legal_move_mask(batch["fen_states"], self.move_uci_to_idx,
-                                                             self.device)
+                            mask = self._get_legal_move_mask(batch["fen_states"],
+                                                             self.move_uci_to_idx).to(self.device)
                             policy_logits = policy_logits.masked_fill(~mask, float('-inf'))
                         policy_loss = policy_loss_fn(policy_logits, policy_tgt)
                         value_loss = value_loss_fn(value_est, value_tgt)
@@ -360,8 +358,8 @@ class Trainer:
                     policy_logits, value_est = self.model(state_tensors)
                     if mask_illegal_moves:  # If True, mask out illegal moves from the policy logits with
                         # -np.inf so that the model does not get penalized for giving them prob mass
-                        mask = self._get_legal_move_mask(batch["fen_states"], self.move_uci_to_idx,
-                                                         self.device)
+                        mask = self._get_legal_move_mask(batch["fen_states"],
+                                                         self.move_uci_to_idx).to(self.device)
                         policy_logits = policy_logits.masked_fill(~mask, float('-inf'))
                     policy_loss = policy_loss_fn(policy_logits, policy_tgt)
                     value_loss = value_loss_fn(value_est, value_tgt)
