@@ -172,11 +172,30 @@ class Trainer:
         self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
 
-        # Configure the optimizer for training
-        decay_params = [p for n, p in model.named_parameters()
-                        if p.requires_grad and not any(nd in n for nd in ['bias', 'bn'])]
-        no_decay_params = [p for n, p in model.named_parameters()
-                           if p.requires_grad and any(nd in n for nd in ['bias', 'bn'])]
+        # Configure the optimizer for training, exclude bias and BatchNorm weights from weight decay
+        # decay_params = [p for n, p in model.named_parameters()
+        #                 if p.requires_grad and not any(nd in n for nd in ['bias', 'bn'])]
+        # no_decay_params = [p for n, p in model.named_parameters()
+        #                    if p.requires_grad and any(nd in n for nd in ['bias', 'bn'])]
+        decay_params, no_decay_params= [], []
+
+        for module in model.modules():
+            for name, param in module.named_parameters(recurse=False):
+                if not param.requires_grad: # Skip over if no gradient tracking
+                    continue
+
+                if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                    # Exclude any kind of batch norm from weight decay
+                    no_decay_params.append(param)
+                elif name == "bias": # Also exclude any bias terms from weight decay as well
+                    no_decay_params.append(param)
+                else: # All others will have weight decay applied to them
+                    decay_params.append(param)
+
+        # Check that all parameters are fully partitioned across decay_params and no_decay_params, check that
+        # there is no overlap and also that the total number across both subsets sums to the expected total
+        assert len(set(decay_params).intersection(set(no_decay_params))) == 0
+        assert (len(decay_params) + len(no_decay_params) == sum(p.requires_grad for p in model.parameters()))
 
         self.opt = torch.optim.AdamW([
             {'params': decay_params, 'weight_decay': weight_decay},
@@ -266,16 +285,18 @@ class Trainer:
                     state[k] = v.to(self.device)
 
 
-    def _get_legal_move_mask(self, state_batch: List[str], move_uci_to_idx: Dict) -> torch.Tensor:
+    def _get_legal_move_mask(self, state_batch: List[str], move_uci_to_idx: Dict, device: str
+                             ) -> torch.Tensor:
         """
         Returns a boolean mask of shape (num_batch, 1968) where True = legal move.
 
         :param state_batch: A list of fen board states.
         :param move_uci_to_idx: A dictionary mapping UCI moves e.g. "a1a2" to integers e.g. 5.
+        :param device: The device to create the legal move mask on e.g. "cuda" or "cpu".
         :returns: A (batch_size, 1968) mask matching the shape of a policy_logits output denoting which moves
             are legal.
         """
-        mask = torch.zeros(len(state_batch), 1968, dtype=torch.bool)
+        mask = torch.zeros(len(state_batch), 1968, dtype=torch.bool, device=device)
         for i, state in enumerate(state_batch):
             board = chess.Board(state)
             for move in board.legal_moves:
@@ -329,8 +350,8 @@ class Trainer:
                         policy_logits, value_est = self.model(state_tensors)
                         if mask_illegal_moves:  # If True, mask out illegal moves from the policy logits with
                             # -np.inf so that the model does not get penalized for giving them prob mass
-                            mask = self._get_legal_move_mask(batch["fen_states"],
-                                                             self.move_uci_to_idx).to(self.device)
+                            mask = self._get_legal_move_mask(batch["fen_states"], self.move_uci_to_idx,
+                                                             self.device)
                             policy_logits = policy_logits.masked_fill(~mask, float('-inf'))
                         policy_loss = policy_loss_fn(policy_logits, policy_tgt)
                         value_loss = value_loss_fn(value_est, value_tgt)
@@ -339,14 +360,14 @@ class Trainer:
                     policy_logits, value_est = self.model(state_tensors)
                     if mask_illegal_moves:  # If True, mask out illegal moves from the policy logits with
                         # -np.inf so that the model does not get penalized for giving them prob mass
-                        mask = self._get_legal_move_mask(batch["fen_states"],
-                                                         self.move_uci_to_idx).to(self.device)
+                        mask = self._get_legal_move_mask(batch["fen_states"], self.move_uci_to_idx,
+                                                         self.device)
                         policy_logits = policy_logits.masked_fill(~mask, float('-inf'))
                     policy_loss = policy_loss_fn(policy_logits, policy_tgt)
                     value_loss = value_loss_fn(value_est, value_tgt)
                     total_loss = policy_loss + value_loss * lambda_val
 
-                if self.amp_dtype == torch.float16:
+                if self.amp_dtype == torch.float16 and self.device == 'cuda':
                     scaler.scale(total_loss).backward()
                     if self.grad_clip is not None:
                         scaler.unscale_(self.opt)  # Unscale before clipping
