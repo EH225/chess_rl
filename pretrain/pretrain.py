@@ -318,12 +318,8 @@ class Trainer:
                 # Get the next training batch and move it to the same device as the model
                 batch = next(inf_dataloader)
                 state_tensors = batch["state_tensors"].to(self.device, non_blocking=True)
-                print("state_tensors.shape", state_tensors.shape)
-                print("state_tensors", state_tensors)
                 value_tgt = batch["value_tgt"].to(self.device, non_blocking=True)
                 policy_tgt = batch["policy_tgt"].to(self.device, non_blocking=True)
-                print("policy_tgt.shape", policy_tgt.shape)
-                print("policy_tgt", policy_tgt)
 
                 self.opt.zero_grad(set_to_none=True)  # Zero the grads of the opt before computing the loss
                 # Compute the forward-pass through the model and compute a tensor that is the same shape
@@ -336,10 +332,7 @@ class Trainer:
                             mask = self._get_legal_move_mask(batch["fen_states"],
                                                              self.move_uci_to_idx).to(self.device)
                             policy_logits = policy_logits.masked_fill(~mask, float('-inf'))
-                        print("policy_logits.shape", policy_logits.shape)
-                        print("policy_logits", policy_logits)
                         policy_loss = policy_loss_fn(policy_logits, policy_tgt)
-                        print("policy_loss", policy_loss)
                         value_loss = value_loss_fn(value_est, value_tgt)
                         total_loss = policy_loss + value_loss * lambda_val
                 else:
