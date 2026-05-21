@@ -13,12 +13,16 @@ output:
     tensorboard: !join_path [*output_path, "tensorboard/"] # Location to save tensorboard log files
     clear_all: False # If set to True, then the output_path is cleared at the start, deletes existing results
 
+model:
+    num_res_blocks: 12
+    channels: 128
+
 pretrain: # Specifies the supervised pre-training parameters
     batch_size: 1024
-    lr_start: 1.0e-5
-    lr_end: 3.0e-6
+    lr_start: 5.0e-6
+    lr_end: 2.0e-6
     weight_decay: 1.0e-2
-    train_num_steps: 130000
+    train_num_steps: 250000
     grad_clip: 1.0
     eval_every: 5000
     save_every: 5000
