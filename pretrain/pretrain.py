@@ -453,10 +453,10 @@ class Trainer:
                     # the next save
                     self.train_losses, self.val_losses = [], []
                     torch.cuda.empty_cache()
+                    gc.collect() # This will slow down training if called too often
 
                 del policy_logits, value_est, mask, policy_loss, value_loss, total_loss
                 del state_tensors, value_tgt, policy_tgt, batch
-                gc.collect()
                 pbar.update(1)
 
 
