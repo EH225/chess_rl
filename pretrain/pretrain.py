@@ -24,8 +24,6 @@ from core.torch_models import MLP, CNN, Transformer
 from utils.general import read_yaml, create_move_to_idx_map
 
 
-
-
 class SupervisedPretrainingDataset(Dataset):
     """
     A dataset for supervised pre-training of a policy-value network on stockfish eval scores and selected
@@ -270,7 +268,8 @@ class Trainer:
             # Instead of loading the prior learning rate scheduler from disk, create a new one according to
             # the new config provided to continue traing after the prior end
             self.scheduler = LinearLR(self.opt, start_factor=1.0, end_factor=self.lr_end / self.lr_start,
-                                      total_iters=self.train_num_steps - self.step)
+                                      total_iters=self.train_num_steps - self.step, last_epoch=-1)
+            print(self.opt.param_groups[0]["lr"])
 
         else: # If not resetting the LR scheduler, then load in the state dict to re-store it
             self.scheduler.load_state_dict(checkpoint_data["scheduler"])
@@ -317,6 +316,20 @@ class Trainer:
         for i, param_group in enumerate(self.opt.param_groups):  # Report the learning rate and weight decay
             self.logger.info(f"lr={param_group['lr']}, wd={param_group['weight_decay']}")
             break  # Show for only the first parameter group, assume all are the same
+
+        if self.step % 100 == 0:
+            lr = self.opt.param_groups[0]['lr']
+            exp_avg_norm = torch.stack([
+                s['exp_avg'].norm() for s in self.opt.state.values() if 'exp_avg' in s
+            ]).mean().item()
+            exp_avg_sq_norm = torch.stack([
+                s['exp_avg_sq'].norm() for s in self.opt.state.values() if 'exp_avg_sq' in s
+            ]).mean().item()
+            last_lr = self.scheduler.get_last_lr()[0]
+            self.logger.info(
+                f"step={self.step} | lr={lr:.2e} | scheduler_lr={last_lr:.2e} | "
+                f"exp_avg_norm={exp_avg_norm:.4f} | exp_avg_sq_norm={exp_avg_sq_norm:.4f}"
+            )
 
         value_loss_fn = nn.MSELoss()  # Use MSE loss for the value head avg value =~ 0.5
         policy_loss_fn = nn.CrossEntropyLoss()  # Use cross-entropy loss for the policy head, avg val =~ 7.6
