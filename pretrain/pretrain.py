@@ -12,7 +12,6 @@ import torch
 import argparse
 import torch.nn as nn
 from tqdm.auto import tqdm
-from torch.optim import AdamW
 from typing import Tuple, Callable, Dict, List
 import logging
 import chess
@@ -397,6 +396,7 @@ class Trainer:
                     exp_avg_sq_norm = torch.stack([
                         s['exp_avg_sq'].norm() for s in self.opt.state.values() if 'exp_avg_sq' in s
                     ]).mean().item()
+
                     last_lr = self.scheduler.get_last_lr()[0]
                     self.logger.info(
                         f"step={self.step} | lr={lr:.2e} | scheduler_lr={last_lr:.2e} | "

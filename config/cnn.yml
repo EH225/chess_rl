@@ -22,7 +22,7 @@ pretrain: # Specifies the supervised pre-training parameters
     lr_start: 1.0e-3
     lr_end: 5.0e-6
     weight_decay: 1.0e-2
-    train_num_steps: 150000
+    train_num_steps: 250000
     grad_clip: 1.0
     eval_every: 5000
     save_every: 5000
