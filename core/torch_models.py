@@ -182,8 +182,8 @@ class MLP(nn.Module):
         if len(state_batch) > 0:
             # Convert the input board into the expected state representation and pass it through the network
             return self.model(self.state_to_model_input(state_batch).to(self.device)).squeeze(1)
-        else:  # If an empty batch is passed, return an empty torch.Tensor
-            return torch.zeros(0).to(self.device)
+        else:  # If an empty batch is passed, return 2 empty torch.Tensors for the policy and value heads
+            return torch.zeros(0).to(self.device), torch.zeros(0).to(self.device)
 
 
 ####################################

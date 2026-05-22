@@ -522,7 +522,6 @@ class Node_MCTS:
         self.virtual_loss = 0
         self.children = []  # A collection of pointers to other child nodes, doesn't get populated until
         # this node is expanded i.e. visited for the first time by the selection step
-        self.unvisited_leaf_nodes = 1  # Track how many unvisited leaf nodes including this node itself
         self.prior = 0  # Init the prior value as 0 unless otherwise updated by a heuristic
         self.c_init, self.c_base = 1.25, 19652  # Constants used for the exploration term c_puct
 
@@ -554,32 +553,25 @@ class Node_MCTS:
             - P(child) = The prior value estimate for the child node, used to perform informed exploration
             - N(parent) = How many times the parent node has been visited in total
         """
-        if not self.children or self.unvisited_leaf_nodes == 0:  # Return None if there are no child nodes
-            return None  # or if there are no unvisited leaf node descendents of the child nodes
+        if not self.children:  # Return None if there are no child nodes
+            return None
 
         # Look for the max PUCT value among all child nodes with unvisited leaf nodes
         argmax_node, max_val = None, -float("inf")
         for child in self.children:
-            if child.unvisited_leaf_nodes == 0:  # Skip if everything has already been explored
-                continue
-            else:
-                n_eff = child.n_visits + child.virtual_loss  # virtual_loss discourages repeat selections
-                # print("n_eff", n_eff)
-                #   print("child.value_sum", child.value_sum)
-                val = (child.value_sum / n_eff) if n_eff > 0 else 0  # Avoid division by 0 issues
-                # At this node, we will select the the child whose value is most appealing to this node's
-                # perspective, all value_sums are from the root's perspective so flip the signs if this node
-                # is played by the opponent who would want to minimize the return of the root node
-                # print("val pre-flip", val, "self.node_turn", self.node_turn, "self.root_turn", self.root_turn)
-                val *= (1 if self.node_turn == self.root_turn else -1)
-                # print("val post-flip", val)
-                c_puct = self.c_init + np.log(n_eff + self.c_base + 1) - np.log(self.c_base)
-                # child.prior is recorded from the perspective of the this node, the parent node so no sign
-                # flip is needed, they're also normalized using softmax so it's non-trivial to flip them
-                val += c_puct * child.prior * np.sqrt(self.n_visits) / (1 + n_eff)
-                if val > max_val:  # Update the argmax node seen so far, select the highest value node among
-                    # all child nodes from this node's turn perspective
-                    argmax_node, max_val = child, val
+            n_eff = child.n_visits + child.virtual_loss  # virtual_loss discourages repeat selections
+            val = (child.value_sum / n_eff) if n_eff > 0 else 0  # Avoid division by 0 issues
+            # At this node, we will select the the child whose value is most appealing to this node's
+            # perspective, all value_sums are from the root's perspective so flip the signs if this node
+            # is played by the opponent who would want to minimize the return of the root node
+            val *= (1 if self.node_turn == self.root_turn else -1)
+            c_puct = self.c_init + np.log(self.n_visits + self.c_base + 1) - np.log(self.c_base)
+            # child.prior is recorded from the perspective of the this node, the parent node so no sign
+            # flip is needed, they're also normalized using softmax so it's non-trivial to flip them
+            val += c_puct * child.prior * np.sqrt(self.n_visits) / (1 + n_eff)
+            if val > max_val:  # Update the argmax node seen so far, select the highest value node among
+                # all child nodes from this node's turn perspective
+                argmax_node, max_val = child, val
 
         return argmax_node
 
@@ -596,7 +588,6 @@ class Node_MCTS:
         :return: None, Node objects are added as children to the current node.
         """
         assert not self.is_expanded, "This node has already been expanded"
-        unvisited_leaf_nodes_chg = -1  # Record how many new unexplored leaf nodes are created, this node
         # goes from being an unvisted / unexpanded node to expanded so we minus 1 to start with
         if not self.is_terminal:  # If not terminal, then there are additional child nodes we can add
             board = chess.Board(self.state)  # Init a chess board object for internal operations
@@ -611,11 +602,11 @@ class Node_MCTS:
                     child.prior = policy_logits[MOVE_TO_IDX[str(move)]]
                 self.children.append(child)
                 board.pop()  # Backtrack to visit the next legal move
-                unvisited_leaf_nodes_chg += 1  # Record another unexplored child node added
 
             # Once we've added all the prior values, normalize across them using softmax to ensure that they
             # are all positive and sum to 1 across all actions (children)
-            normed_priors = softmax([child.prior.astype(np.float64) for child in self.children])
+            logits = np.array([child.prior for child in self.children], dtype=np.float64)
+            normed_priors = softmax(logits)
             if self.parent is None:  # Add dirichlet noise at the parent node to the child prior values
                 alpha, eps = 0.3, 0.25
                 noise = RNG.dirichlet([alpha for i in range(len(self.children))], size=1).reshape(-1)
@@ -626,23 +617,16 @@ class Node_MCTS:
             for i, prior_val in enumerate(normed_priors):  # Update values after applying softmax collectively
                 self.children[i].prior = prior_val
 
-            node = self  # Back propagate the update for unvisited_leaf_nodes to the root node
-            while node is not None:
-                node.unvisited_leaf_nodes += unvisited_leaf_nodes_chg
-                node = node.parent
-
         self.is_expanded = True  # Set this flag to true now that this node has been expanded with children
 
     def increment_virtual_loss(self) -> None:
         """
         Starting at this node, this method increments the virtual_loss counters for all nodes along the path
-        from this node to the root node and also decrements the unvisited_leaf_nodes counters to prevent
-        duplicate node selections from being made and to discourage similar node path selections overall.
+        from this node to the root node to discourage similar node path selections overall.
         """
         node = self
         while node is not None:
             node.virtual_loss += 1
-            node.unvisited_leaf_nodes -= 1
             node = node.parent  # Move up to the next node along the path to the root
 
     def backup(self, val_est: float) -> None:
@@ -689,7 +673,7 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
     initial_state = state # Keep a copy of the initial state for later
     cache = {}  # Cache the outputs from the model, if we send it the same state 2x re-use prior values
     terminal_nodes = 0  # Count how many of the nodes reached were terminal
-    nodes_expanded = 0  # Count how many total nodes are expanded during MCTS
+    nodes_selected = 0  # Count how many total nodes are expanded during MCTS
     root = Node_MCTS(state=state, parent=None)  # Create a search tree root node
     if root.is_terminal:  # If the input state is a terminal state, no searching required, board value known
         return 9999, root.terminal_reward, np.zeros(0), (1, 0, 1)
@@ -701,19 +685,15 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
             p_logits = policy_logits.cpu().float().numpy().reshape(-1) # (1968, )
             val_est = value_batch.cpu().float().reshape(-1).tolist()  # (batch_size, )
 
-        root.backup(val_est[0])
         root.expand_legal_moves(p_logits)
+        root.backup(val_est[0])
 
-    while nodes_expanded < n_iters:  # Run a batched MC process for batched model forward passes
+    selections_remaining = min(batch_size, n_iters - nodes_selected)
+    for k in range(selections_remaining):  # Run a batched MC process for batched model forward passes
         leaf_nodes = []  # Record leaf nodes to be passed to the model for batched evaluation
-
-        if root.unvisited_leaf_nodes == 0:  # If all nodes have been explored, stop iterating, there are
-            break  # no further unexplored leaf nodes left, all leaf nodes are terminal nodes, stop searching
 
         # 1). Select leaf nodes for expansion in batches for batched evaluation through model(state_batch)
         for k in range(batch_size):  # Make batch_size leaf node selections
-            if root.unvisited_leaf_nodes == 0:  # If all nodes have been explored, stop iterating, there are
-                break  # no further unexplored leaf nodes left, all leaf nodes are terminal nodes
 
             node = root  # All paths in the tree begin at the root node
 
@@ -724,13 +704,12 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
                 node = node.argmax_PUCT_child()  # Select a child node using Upper Confidence Bounds
 
             leaf_node = node  # Change alias now that we've reached the end of the node path
-            # Use virtual loss to discourage other iters from selecting a similar path and decriment the
-            # unvisited_leaf_nodes counters along this path to prevent duplicate selections
+            # Use virtual loss to discourage other iters from selecting a similar path
             node.increment_virtual_loss()
             leaf_nodes.append(leaf_node)  # Add this leaf node to our selection of leaf_nodes
             if leaf_node.is_terminal:
                 terminal_nodes += 1  # Count how many nodes visited are terminal overall
-            nodes_expanded += 1
+            nodes_selected += 1
 
         # 2). Collect the states from each leaf node and evaluate with 1 batch through the model
         state_batch, leaf_node_idx = [], []
@@ -754,10 +733,6 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
         # 3). Perform backup operations to propagate the new value estimates upwards in the tree and update
         # the prior value estimates from using the heuristic priors to using the policy_logit values instead
         for i, leaf_node in enumerate(leaf_nodes):
-            # We only ever select and expand a leaf node 1x, assert that this is leaf hasn't already been
-            # reached and expanded before, if so then raise an assertion error
-            assert not leaf_node.is_expanded, "leaf node already expanded"
-
             if leaf_node.is_terminal:  # Then the value of the game state is know for certain, no est needed
                 p_logits, val_est = None, leaf_node.terminal_reward
             else:  # Otherwise we will rely on the model to approximate the value of the state
@@ -765,13 +740,18 @@ def monte_carlo_tree_search(state: str, model, batch_size: int = 32, n_iters: in
                 p_logits, val_est = cache[leaf_node.state_]
                 val_est = val_est * (1 if leaf_node.node_turn == leaf_node.root_turn else -1)
 
+            # Create child nodes (if non-terminal) and not yet already expanded (could be duplicates in batch)
+            if not leaf_node.is_expanded:
+                leaf_node.expand_legal_moves(p_logits)
             # Add the estimated value to all nodes along the path from leaf to root and decrement virtual loss
             leaf_node.backup(val_est)
-            leaf_node.expand_legal_moves(p_logits)  # Create child nodes (if non-terminal)
 
     # Now that we have populated the MC tree, identify the best action and the estimated state value
     action_values = np.array([node.Q() for node in root.children])
-    state_value, best_action = action_values.max(), np.argmax(action_values)
+    visit_counts = np.array([child.n_visits for child in root.children])
+    state_value = np.sum(action_values * visit_counts) / visit_counts.sum() # Take the weighted avg
+    # best_action = np.argmax(action_values)
+    best_action = np.argmax(visit_counts) # Pick the best action based on the most visited first child
     env = ChessEnv(initial_state=initial_state)  # Instantiate the initial game state
     best_action = env.get_move_idx(best_action) # Convert to an int [0, 1967]
-    return best_action, state_value, action_values, (nodes_expanded, max_depth(root), terminal_nodes)
+    return best_action, state_value, action_values, (nodes_selected, max_depth(root), terminal_nodes)

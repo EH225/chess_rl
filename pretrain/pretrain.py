@@ -388,7 +388,7 @@ class Trainer:
                                           value_loss.item(), total_loss.item()))
                 self.step += 1
 
-                if self.step % 100 == 0:
+                if self.step % 1000 == 0:
                     lr = self.opt.param_groups[0]['lr']
                     exp_avg_norm = torch.stack([
                         s['exp_avg'].norm() for s in self.opt.state.values() if 'exp_avg' in s
