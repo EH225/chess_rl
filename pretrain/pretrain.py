@@ -13,7 +13,7 @@ import argparse
 import torch.nn as nn
 from tqdm.auto import tqdm
 from typing import Tuple, Callable, Dict, List
-import logging
+import logging, gc
 import chess
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
@@ -199,6 +199,8 @@ class Trainer:
             {'params': no_decay_params, 'weight_decay': 0.0}
             ], lr=lr_start, betas=adam_betas)
 
+        self.scaler = torch.amp.GradScaler('cuda')
+
         self.reset_lr_scheduler = reset_lr_scheduler
         self.lr_start, self.lr_end = lr_start, lr_end
         warmup_steps = 5000  # Slowly ramp up the learning rate from very low to peak
@@ -233,6 +235,7 @@ class Trainer:
                 "model": self.model.state_dict(),
                 "opt": self.opt.state_dict(),
                 "scheduler": self.scheduler.state_dict(),
+                "scaler": self.scaler.state_dict(),
                 }
         torch.save(data, checkpoint_path)
         # Save down all the loss values produced by model training since the last caching
@@ -260,6 +263,8 @@ class Trainer:
         self.step = checkpoint_data["step"]
         self.model.load_state_dict(checkpoint_data["model"])
         self.opt.load_state_dict(checkpoint_data["opt"])
+        if "scaler" in checkpoint_data:  ## TODO TEMP to match legacy checkpoints without this
+            self.scaler.load_state_dict(checkpoint_data["scaler"])
         if self.reset_lr_scheduler:  # If True, do not load the prior learning rate scheduler state
             for g in self.opt.param_groups:  # Make sure the optimizer learning rates match the new scheduler
                 g["lr"] = self.lr_start
@@ -326,9 +331,6 @@ class Trainer:
         inf_dataloader = infinite_loader(self.train_dataloader)  # This does not cache batches
         grad_norm = 0.0  # Set a default in-case no grad-norm is used for the progress bar
 
-        if self.amp_dtype == torch.float16 and self.device == 'cuda':
-            scaler = torch.amp.GradScaler('cuda')
-
         with tqdm(initial=self.step, total=self.train_num_steps) as pbar:
 
             while self.step < self.train_num_steps:  # Run until all training iterations are complete
@@ -364,12 +366,12 @@ class Trainer:
                     total_loss = policy_loss + value_loss * lambda_val
 
                 if self.amp_dtype == torch.float16 and self.device == 'cuda':
-                    scaler.scale(total_loss).backward()
+                    self.scaler.scale(total_loss).backward()
                     if self.grad_clip is not None:
-                        scaler.unscale_(self.opt)  # Unscale before clipping
+                        self.scaler.unscale_(self.opt)  # Unscale before clipping
                         grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
-                    scaler.step(self.opt)  # Update the model parameters by taking a gradient step
-                    scaler.update()
+                    self.scaler.step(self.opt)  # Update the model parameters by taking a gradient step
+                    self.scaler.update()
                 else:
                     total_loss.backward()
                     if self.grad_clip is not None:
@@ -452,8 +454,9 @@ class Trainer:
                     self.train_losses, self.val_losses = [], []
                     torch.cuda.empty_cache()
 
-                del policy_logits, value_est, policy_loss, value_loss, total_loss
+                del policy_logits, value_est, mask, policy_loss, value_loss, total_loss
                 del state_tensors, value_tgt, policy_tgt, batch
+                gc.collect()
                 pbar.update(1)
 
 
